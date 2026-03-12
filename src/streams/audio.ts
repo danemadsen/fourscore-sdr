@@ -70,13 +70,14 @@ export class AudioStream extends BaseStream implements AudioStreamEvents {
     }
   }
 
-  protected onBinary(tag: string, body: Buffer): void {
+  protected onBinary(tag: string, body: Uint8Array): void {
     if (tag !== 'SND') return;
     if (body.length < 7) return;
 
-    const flags    = body.readUInt8(0);
-    const sequence = body.readUInt32LE(1);
-    const smeter   = body.readUInt16BE(5);
+    const view     = new DataView(body.buffer, body.byteOffset, body.byteLength);
+    const flags    = view.getUint8(0);
+    const sequence = view.getUint32(1, true);   // little-endian
+    const smeter   = view.getUint16(5, false);  // big-endian
     const rssi     = 0.1 * smeter - 127;
     let audioData  = body.subarray(7);
 
@@ -84,10 +85,11 @@ export class AudioStream extends BaseStream implements AudioStreamEvents {
     if (flags & SND_FLAG_STEREO) {
       // GPS timestamp is prepended to audio data in IQ/stereo mode
       if (audioData.length >= 10) {
+        const gpsView = new DataView(audioData.buffer, audioData.byteOffset, audioData.byteLength);
         gps = {
-          lastGpsSolution: audioData.readUInt8(0),
-          seconds:         audioData.readUInt32LE(2),
-          nanoseconds:     audioData.readUInt32LE(6),
+          lastGpsSolution: gpsView.getUint8(0),
+          seconds:         gpsView.getUint32(2, true),  // little-endian
+          nanoseconds:     gpsView.getUint32(6, true),  // little-endian
         };
         audioData = audioData.subarray(10);
       }
@@ -98,9 +100,10 @@ export class AudioStream extends BaseStream implements AudioStreamEvents {
       samples = this.decoder.decode(audioData);
     } else {
       // Raw 16-bit big-endian PCM
+      const pcmView = new DataView(audioData.buffer, audioData.byteOffset, audioData.byteLength);
       samples = new Int16Array(audioData.length / 2);
       for (let i = 0; i < samples.length; i++) {
-        samples[i] = audioData.readInt16BE(i * 2);
+        samples[i] = pcmView.getInt16(i * 2, false);  // big-endian
       }
     }
 

@@ -1,5 +1,3 @@
-import https from 'https';
-import http from 'http';
 import { KiwiSDROptions, AudioStreamOptions, WaterfallStreamOptions } from './types';
 import { AudioStream } from './streams/audio';
 import { WaterfallStream } from './streams/waterfall';
@@ -98,25 +96,18 @@ export class KiwiSDR {
    * const status = await kiwi.getStatus();
    * console.log(status.rx_chans, status.users);
    */
-  getStatus(): Promise<Record<string, string>> {
-    return new Promise((resolve, reject) => {
-      const url = `http://${this.host}:${this.port}/status`;
-      const transport = url.startsWith('https') ? https : http;
-
-      transport.get(url, (res) => {
-        let raw = '';
-        res.on('data', (chunk: string) => { raw += chunk; });
-        res.on('end', () => {
-          const result: Record<string, string> = {};
-          for (const line of raw.trim().split('\n')) {
-            const eq = line.indexOf('=');
-            if (eq !== -1) {
-              result[line.slice(0, eq).trim()] = line.slice(eq + 1).trim();
-            }
-          }
-          resolve(result);
-        });
-      }).on('error', reject);
-    });
+  async getStatus(): Promise<Record<string, string>> {
+    const url = `http://${this.host}:${this.port}/status`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const raw = await res.text();
+    const result: Record<string, string> = {};
+    for (const line of raw.trim().split('\n')) {
+      const eq = line.indexOf('=');
+      if (eq !== -1) {
+        result[line.slice(0, eq).trim()] = line.slice(eq + 1).trim();
+      }
+    }
+    return result;
   }
 }

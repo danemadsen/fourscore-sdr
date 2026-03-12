@@ -55,7 +55,7 @@ export class ImaAdpcmDecoder {
 
   /** Decode a buffer of IMA-ADPCM nibbles into 16-bit PCM samples.
    *  Each input byte produces 2 output samples (lower nibble first). */
-  decode(data: Buffer | Uint8Array): Int16Array {
+  decode(data: Uint8Array): Int16Array {
     const samples = new Int16Array(data.length * 2);
     for (let i = 0; i < data.length; i++) {
       const b = data[i];

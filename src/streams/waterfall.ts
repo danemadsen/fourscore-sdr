@@ -54,13 +54,14 @@ export class WaterfallStream extends BaseStream implements WaterfallStreamEvents
     // No MSG handling specific to waterfall
   }
 
-  protected onBinary(tag: string, body: Buffer): void {
+  protected onBinary(tag: string, body: Uint8Array): void {
     if (tag !== 'W/F') return;
     if (body.length < 12) return;
 
-    const xBin     = body.readUInt32LE(0);
-    const flagsRaw = body.readUInt32LE(4);
-    const sequence = body.readUInt32LE(8);
+    const view     = new DataView(body.buffer, body.byteOffset, body.byteLength);
+    const xBin     = view.getUint32(0, true);  // little-endian
+    const flagsRaw = view.getUint32(4, true);  // little-endian
+    const sequence = view.getUint32(8, true);  // little-endian
     const raw      = body.subarray(12);
 
     const zoom  = flagsRaw & 0xff;
