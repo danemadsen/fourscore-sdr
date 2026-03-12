@@ -1,0 +1,345 @@
+:root {
+  font-family: 'Courier New', Courier, monospace;
+  background: #0a0c0f;
+  color: #c8d8e8;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+#root {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* ── Header ─────────────────────────────────────── */
+.sdr-header {
+  background: #111620;
+  border-bottom: 1px solid #1e2d3d;
+  padding: 8px 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.sdr-title {
+  font-size: 14px;
+  font-weight: bold;
+  color: #44aaff;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  margin-right: 8px;
+  white-space: nowrap;
+}
+
+.sdr-host {
+  color: #445566;
+  font-size: 11px;
+  margin-right: 4px;
+}
+
+/* ── Controls row ────────────────────────────────── */
+.controls-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.ctrl-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ctrl-label {
+  color: #556677;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  white-space: nowrap;
+}
+
+/* Frequency display */
+.freq-display {
+  display: flex;
+  align-items: baseline;
+  background: #080c10;
+  border: 1px solid #1e2d3d;
+  border-radius: 3px;
+  padding: 2px 6px;
+}
+
+.freq-input {
+  background: transparent;
+  border: none;
+  outline: none;
+  color: #33ddff;
+  font-family: 'Courier New', monospace;
+  font-size: 20px;
+  font-weight: bold;
+  width: 90px;
+  text-align: right;
+  letter-spacing: 1px;
+}
+
+.freq-unit {
+  color: #445566;
+  font-size: 11px;
+  margin-left: 3px;
+}
+
+/* Mode selector */
+.mode-select {
+  background: #111620;
+  border: 1px solid #1e2d3d;
+  color: #c8d8e8;
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+  padding: 3px 6px;
+  border-radius: 3px;
+  cursor: pointer;
+  outline: none;
+}
+
+.mode-select:focus {
+  border-color: #44aaff;
+}
+
+/* Buttons */
+.btn {
+  background: #111620;
+  border: 1px solid #1e2d3d;
+  color: #c8d8e8;
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+  white-space: nowrap;
+}
+
+.btn:hover {
+  border-color: #44aaff;
+  color: #44aaff;
+}
+
+.btn.active {
+  border-color: #00ff44;
+  color: #00ff44;
+  background: #0a1a0a;
+}
+
+.btn.connect {
+  border-color: #44aaff;
+  color: #44aaff;
+  font-weight: bold;
+}
+
+.btn.connect.connected {
+  border-color: #00ff44;
+  color: #00ff44;
+  background: #0a1a0a;
+}
+
+/* Volume slider */
+.vol-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 80px;
+  height: 4px;
+  background: #1e2d3d;
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+}
+
+.vol-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #44aaff;
+  cursor: pointer;
+}
+
+/* Zoom input */
+.zoom-input {
+  background: #080c10;
+  border: 1px solid #1e2d3d;
+  color: #c8d8e8;
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+  padding: 3px 6px;
+  border-radius: 3px;
+  width: 40px;
+  text-align: center;
+  outline: none;
+}
+
+.zoom-input:focus {
+  border-color: #44aaff;
+}
+
+/* ── Waterfall ───────────────────────────────────── */
+.waterfall-wrapper {
+  position: relative;
+  width: 100%;
+  background: #000;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.waterfall-canvas {
+  width: 100%;
+  height: calc(100% - 20px);
+  display: block;
+  cursor: crosshair;
+  image-rendering: pixelated;
+}
+
+.freq-axis {
+  height: 20px;
+  position: relative;
+  background: #090c11;
+  border-top: 1px solid #1e2d3d;
+  flex-shrink: 0;
+}
+
+.freq-tick {
+  position: absolute;
+  transform: translateX(-50%);
+  color: #445566;
+  font-size: 10px;
+  white-space: nowrap;
+  top: 3px;
+}
+
+.freq-tick::before {
+  content: '';
+  position: absolute;
+  top: -5px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 1px;
+  height: 4px;
+  background: #2a3a4a;
+}
+
+/* ── S-Meter ─────────────────────────────────────── */
+.smeter {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #0d1117;
+  border-top: 1px solid #1e2d3d;
+  padding: 8px 12px 20px;
+  flex-shrink: 0;
+}
+
+.smeter-label {
+  color: #445566;
+  font-size: 10px;
+  letter-spacing: 1px;
+  white-space: nowrap;
+}
+
+.smeter-track {
+  flex: 1;
+  height: 14px;
+  background: #080c10;
+  border: 1px solid #1e2d3d;
+  border-radius: 2px;
+  position: relative;
+  overflow: visible;
+}
+
+.smeter-bar {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.1s ease-out, background 0.3s;
+}
+
+.smeter-ticks {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  width: 100%;
+  height: 14px;
+}
+
+.smeter-tick {
+  position: absolute;
+  transform: translateX(-50%);
+  color: #334455;
+  font-size: 9px;
+  white-space: nowrap;
+  top: 2px;
+}
+
+.smeter-readout {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  min-width: 110px;
+}
+
+.smeter-s {
+  color: #00ff44;
+  font-size: 14px;
+  font-weight: bold;
+  min-width: 32px;
+}
+
+.smeter-db {
+  color: #445566;
+  font-size: 11px;
+}
+
+/* ── Overlay ─────────────────────────────────────── */
+.waterfall-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.7);
+  color: #44aaff;
+  font-size: 14px;
+  letter-spacing: 2px;
+  pointer-events: none;
+}
+
+/* ── Error banner ────────────────────────────────── */
+.error-banner {
+  background: #1a0808;
+  border-bottom: 1px solid #552222;
+  color: #ff8888;
+  padding: 4px 12px;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.sep {
+  color: #2a3a4a;
+  user-select: none;
+}
