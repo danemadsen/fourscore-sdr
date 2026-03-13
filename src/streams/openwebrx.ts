@@ -121,6 +121,7 @@ export class OpenWebRXStream extends EventEmitter implements OpenWebRXStreamEven
         this.waterfallMin = wfLevels?.min ?? -150;
         this.waterfallMax = wfLevels?.max ?? 0;
         const fftSize = (value['fft_size'] as number) ?? 1024;
+        console.log('[fourscore-sdr] openwebrx config:', { center_freq: this.centerFreq, samp_rate: this.bandwidth, fft_size: fftSize, audio_compression: this.audioCompression, fft_compression: this.fftCompression, waterfall_levels: { min: this.waterfallMin, max: this.waterfallMax } });
         this.emit('config', {
           centerFreq:       this.centerFreq,
           bandwidth:        this.bandwidth,
@@ -161,8 +162,8 @@ export class OpenWebRXStream extends EventEmitter implements OpenWebRXStreamEven
       // Do NOT reset — decodeWithSync maintains state across frames
       samples = this.audioDecoder.decodeWithSync(new Uint8Array(data));
     } else {
-      // Raw little-endian 16-bit PCM
-      samples = new Int16Array(data);
+      // Raw little-endian 16-bit PCM — truncate to even byte count
+      samples = new Int16Array(data, 0, Math.floor(data.byteLength / 2));
     }
     const audioData: AudioData = { samples, rssi: -127, sequence: this.sequence++, flags: 0 };
     this.emit('audio', audioData);
@@ -170,15 +171,18 @@ export class OpenWebRXStream extends EventEmitter implements OpenWebRXStreamEven
 
   private _handleWaterfall(data: ArrayBuffer): void {
     let bins: Float32Array;
-    if (this.fftCompression === 'adpcm') {
+    // Auto-detect format from frame size rather than trusting config state,
+    // because multiple config messages may arrive and update state while
+    // earlier-encoded frames are still in flight.
+    if (data.byteLength % 4 !== 0) {
+      // ADPCM: byteLen = (COMPRESS_FFT_PAD_N + fftSize) / 2 → fftSize = byteLen*2 - COMPRESS_FFT_PAD_N
       this.fftDecoder.reset();
       const decoded = this.fftDecoder.decode(new Uint8Array(data));
       const trimmed = decoded.subarray(COMPRESS_FFT_PAD_N);
       bins = new Float32Array(trimmed.length);
       for (let i = 0; i < trimmed.length; i++) bins[i] = trimmed[i] / 100;
     } else {
-      // Truncate to nearest 4-byte boundary — server may pad the frame
-      bins = new Float32Array(data, 0, Math.floor(data.byteLength / 4));
+      bins = new Float32Array(data, 0, data.byteLength / 4);
     }
     this.emit('waterfall', { bins, centerFreq: this.centerFreq, bandwidth: this.bandwidth });
   }

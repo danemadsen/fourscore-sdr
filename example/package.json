@@ -10,7 +10,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@fourscore/sdr": "^1.0.0",
+    "@fourscore/sdr": "file:..",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "vite-plugin-node-polyfills": "^0.25.0"

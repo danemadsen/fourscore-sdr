@@ -53,8 +53,10 @@ export default function App() {
   const centerFreqRef  = useRef(centerFreq);
   const owrxSdrCenter  = useRef(0);   // kHz — SDR hardware center, set from config
   const owrxSdrBw      = useRef(0);   // kHz — full SDR bandwidth, set from config
+  const wfCanvasWidthRef = useRef(wfCanvasWidth);
   useEffect(() => { zoomRef.current = zoom; },        [zoom]);
   useEffect(() => { centerFreqRef.current = centerFreq; }, [centerFreq]);
+  useEffect(() => { wfCanvasWidthRef.current = wfCanvasWidth; }, [wfCanvasWidth]);
 
   const disconnect = useCallback(() => {
     audioStreamRef.current?.close();
@@ -133,6 +135,13 @@ export default function App() {
       });
 
       stream.on('waterfall', ({ bins }: OpenWebRXWaterfallData) => {
+        // Resize canvas if actual bin count differs from what config reported
+        // (config and in-flight frames can be out of sync during pipeline transitions)
+        if (bins.length !== wfCanvasWidthRef.current) {
+          setWfCanvasWidth(bins.length);
+          wfCanvasWidthRef.current = bins.length;
+        }
+
         const z = zoomRef.current;
         let displayBins: Float32Array = bins;
         if (z > 0) {
