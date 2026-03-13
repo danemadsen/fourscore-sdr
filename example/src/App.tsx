@@ -12,11 +12,25 @@ const SDR_PORT = parseInt(parsed.port) || 8073;
 
 const MODES: AudioMode[] = ['am', 'amn', 'amw', 'lsb', 'usb', 'cw', 'cwn', 'nbfm', 'iq'];
 
+const MODE_CUTS: Record<string, { low: number; high: number }> = {
+  am:   { low: -4900, high: 4900 },
+  amn:  { low: -2500, high: 2500 },
+  amw:  { low: -8000, high: 8000 },
+  lsb:  { low: -2700, high: -300 },
+  usb:  { low:  300,  high: 2700 },
+  cw:   { low: -500,  high:  500 },
+  cwn:  { low: -250,  high:  250 },
+  nbfm: { low: -6000, high: 6000 },
+  iq:   { low: -5000, high: 5000 },
+};
+
 export default function App() {
   const [connected, setConnected] = useState(false);
   const [frequency, setFrequency] = useState(7200);
   const [freqInput, setFreqInput] = useState('7200');
   const [mode, setMode] = useState<AudioMode>('lsb');
+  const [lowCut, setLowCut] = useState(MODE_CUTS.lsb.low);
+  const [highCut, setHighCut] = useState(MODE_CUTS.lsb.high);
   const [zoom, setZoom] = useState(0);
   const [centerFreq, setCenterFreq] = useState(15000);
   const [agc, setAgc] = useState(true);
@@ -60,6 +74,8 @@ export default function App() {
     const astream = kiwi.openAudioStream({
       frequency,
       mode,
+      lowCut,
+      highCut,
       agc,
       sampleRate: 12000,
     });
@@ -127,7 +143,7 @@ export default function App() {
     wfstream.on('close', (code: number, reason: string) => {
       console.log('[kiwi wf close]', code, reason);
     });
-  }, [connected, disconnect, frequency, mode, agc, zoom, centerFreq, audio]);
+  }, [connected, disconnect, frequency, mode, lowCut, highCut, agc, zoom, centerFreq, audio]);
 
   // Update volume without reconnecting
   useEffect(() => {
@@ -155,15 +171,25 @@ export default function App() {
 
   const handleModeChange = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
     const m = e.target.value as AudioMode;
+    const cuts = MODE_CUTS[m] ?? { low: -2700, high: 2700 };
     setMode(m);
-    audioStreamRef.current?.tune(frequency, m);
+    setLowCut(cuts.low);
+    setHighCut(cuts.high);
+    audioStreamRef.current?.tune(frequency, m, cuts.low, cuts.high);
   }, [frequency]);
 
   const handleZoomChange = useCallback((delta: number) => {
     const z = Math.max(0, Math.min(14, zoom + delta));
     setZoom(z);
-    wfStreamRef.current?.setView(z, centerFreq);
-  }, [zoom, centerFreq]);
+    if (z > 0) {
+      const bw = 30000 / Math.pow(2, z);
+      const cf = Math.max(bw / 2, Math.min(30000 - bw / 2, frequency));
+      setCenterFreq(cf);
+      wfStreamRef.current?.setView(z, cf);
+    } else {
+      wfStreamRef.current?.setView(z, centerFreq);
+    }
+  }, [zoom, centerFreq, frequency]);
 
   const handleAgcToggle = useCallback(() => {
     const next = !agc;
@@ -261,6 +287,8 @@ export default function App() {
         centerFreq={centerFreq}
         zoom={zoom}
         tuneFreq={frequency}
+        lowCut={lowCut}
+        highCut={highCut}
         minDb={-120}
         maxDb={-20}
         onTune={handleTune}

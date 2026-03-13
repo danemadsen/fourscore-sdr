@@ -39,6 +39,8 @@ interface WaterfallProps {
   centerFreq: number;
   zoom: number;
   tuneFreq: number;
+  lowCut: number;   // Hz offset from tuneFreq
+  highCut: number;  // Hz offset from tuneFreq
   minDb: number;
   maxDb: number;
   onTune: (freq: number) => void;
@@ -52,7 +54,7 @@ const CANVAS_W = 1024;
 const CANVAS_H = 300;
 
 export const Waterfall = forwardRef<WaterfallHandle, WaterfallProps>(
-  ({ centerFreq, zoom, tuneFreq, minDb, maxDb, onTune }, ref) => {
+  ({ centerFreq, zoom, tuneFreq, lowCut, highCut, minDb, maxDb, onTune }, ref) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const rowBufRef = useRef<ImageData | null>(null);
     const [hoverFreq, setHoverFreq] = useState<number | null>(null);
@@ -67,6 +69,16 @@ export const Waterfall = forwardRef<WaterfallHandle, WaterfallProps>(
       ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
       rowBufRef.current = ctx.createImageData(CANVAS_W, 1);
     }, []);
+
+    // Clear canvas when view changes so overlays stay aligned with incoming data
+    useEffect(() => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+    }, [zoom, centerFreq]);
 
     // At zoom=0 the full bandwidth is always shown regardless of centerFreq
     const bw = TOTAL_BW / Math.pow(2, zoom);
@@ -150,6 +162,26 @@ export const Waterfall = forwardRef<WaterfallHandle, WaterfallProps>(
             onMouseMove={handleMouseMove}
             onMouseLeave={handleMouseLeave}
           />
+          {/* Passband highlight */}
+          {tuneX >= 0 && tuneX <= 100 && (() => {
+            const pbLeft = freqToPercent(tuneFreq + lowCut / 1000);
+            const pbRight = freqToPercent(tuneFreq + highCut / 1000);
+            if (pbRight < 0 || pbLeft > 100) return null;
+            const clampedLeft = Math.max(0, pbLeft);
+            const clampedRight = Math.min(100, pbRight);
+            return (
+              <div style={{
+                position: 'absolute', top: 0, bottom: 0,
+                left: `${clampedLeft}%`,
+                width: `${clampedRight - clampedLeft}%`,
+                minWidth: '2px',
+                background: 'rgba(255, 255, 100, 0.2)',
+                border: '1px solid rgba(255, 255, 100, 0.5)',
+                boxSizing: 'border-box',
+                pointerEvents: 'none',
+              }} />
+            );
+          })()}
           {/* Tuning cursor */}
           {tuneX >= 0 && tuneX <= 100 && (
             <div style={{
