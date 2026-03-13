@@ -50,12 +50,10 @@ export class OpenWebRXStream extends EventEmitter implements OpenWebRXStreamEven
   private waterfallMax = 0;
   private sequence = 0;
   private dspStarted = false;
-  private readonly magicKey: string;
   private readonly opts: ResolvedOptions;
 
   constructor(host: string, port: number, opts: OpenWebRXStreamOptions) {
     super();
-    this.magicKey = Math.random().toString(36).substring(2, 11);
     const cuts = MODE_CUTS[opts.mode];
     this.opts = {
       frequency:  opts.frequency,
@@ -132,11 +130,7 @@ export class OpenWebRXStream extends EventEmitter implements OpenWebRXStreamEven
           waterfallMax:     this.waterfallMax,
           fftSize,
         });
-        // Server is ready — set frequency and start DSP
-        this._sendJson({
-          type:   'setfrequency',
-          params: { frequency: Math.round(this.opts.frequency * 1000), key: this.magicKey },
-        });
+        // Server is ready — start DSP (offset_freq computed from center_freq)
         this._sendDspControl();
         this.emit('open');
         break;
@@ -190,12 +184,15 @@ export class OpenWebRXStream extends EventEmitter implements OpenWebRXStreamEven
   }
 
   private _sendDspControl(): void {
+    const offsetHz = this.centerFreq > 0
+      ? Math.round(this.opts.frequency * 1000) - this.centerFreq
+      : 0;
     this._sendJson({
       type: 'dspcontrol',
       params: {
         low_cut:       this.opts.lowCut,
         high_cut:      this.opts.highCut,
-        offset_freq:   0,
+        offset_freq:   offsetHz,
         mod:           this.opts.mode,
         squelch_level: this.opts.squelch,
       },
@@ -219,10 +216,6 @@ export class OpenWebRXStream extends EventEmitter implements OpenWebRXStreamEven
     const cuts = MODE_CUTS[mode];
     this.opts.lowCut  = lowCut  ?? cuts.lowCut;
     this.opts.highCut = highCut ?? cuts.highCut;
-    this._sendJson({
-      type:   'setfrequency',
-      params: { frequency: Math.round(frequency * 1000), key: this.magicKey },
-    });
     this._sendDspControl();
   }
 
