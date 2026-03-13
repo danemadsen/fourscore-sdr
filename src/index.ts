@@ -1,12 +1,17 @@
 export { KiwiSDR } from './client';
 export { AudioStream } from './streams/audio';
 export { WaterfallStream } from './streams/waterfall';
+export { OpenWebRX } from './openwebrx';
+export { OpenWebRXStream } from './streams/openwebrx';
 export { MODE_CUTS, AUDIO_MODES } from './modes';
 export type { ModeCuts } from './modes';
 export type {
   KiwiSDROptions,
   AudioStreamOptions,
   WaterfallStreamOptions,
+  OpenWebRXOptions,
+  OpenWebRXStreamOptions,
+  OpenWebRXWaterfallData,
   AudioMode,
   AudioData,
   WaterfallData,

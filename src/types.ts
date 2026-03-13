@@ -105,7 +105,43 @@ export interface WaterfallData {
   flags: number;
 }
 
-// SND flags
+// ─── OpenWebRX ────────────────────────────────────────────────────────────────
+
+export interface OpenWebRXOptions {
+  /** Hostname */
+  host: string;
+  /** Port number, defaults to 8073 */
+  port?: number;
+}
+
+export interface OpenWebRXStreamOptions {
+  /** Tuned frequency in kHz */
+  frequency: number;
+  /** Demodulation mode */
+  mode: AudioMode;
+  /** Low passband cut in Hz, defaults to mode default */
+  lowCut?: number;
+  /** High passband cut in Hz, defaults to mode default */
+  highCut?: number;
+  /** Audio output rate in Hz, defaults to 48000 */
+  outputRate?: number;
+  /** Squelch level in dBm, defaults to -150 (off) */
+  squelch?: number;
+  /** Username for identification */
+  username?: string;
+}
+
+export interface OpenWebRXWaterfallData {
+  /** FFT bin power values in dB */
+  bins: Float32Array;
+  /** Center frequency of the SDR in Hz */
+  centerFreq: number;
+  /** Bandwidth (sample rate) of the SDR in Hz */
+  bandwidth: number;
+}
+
+// ─── SND flags ────────────────────────────────────────────────────────────────
+
 export const SND_FLAG_ADC_OVFL = 0x02;
 export const SND_FLAG_STEREO = 0x08;
 export const SND_FLAG_COMPRESSED = 0x10;
