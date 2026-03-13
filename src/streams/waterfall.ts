@@ -25,7 +25,7 @@ export class WaterfallStream extends BaseStream implements WaterfallStreamEvents
     opts: WaterfallStreamOptions,
   ) {
     const password = opts.password ?? '';
-    const username = opts.username ?? 'open-sigint';
+    const username = opts.username ?? 'fourscore';
     super(host, port, 'W/F', password, username);
 
     this.opts = {

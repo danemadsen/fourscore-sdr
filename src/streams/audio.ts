@@ -9,7 +9,6 @@ import {
 } from '../types';
 
 const DEFAULT_SAMPLE_RATE = 44100;
-const INPUT_SAMPLE_RATE = 12000;
 
 export interface AudioStreamEvents {
   on(event: 'open', listener: () => void): this;
@@ -30,7 +29,7 @@ export class AudioStream extends BaseStream implements AudioStreamEvents {
     opts: AudioStreamOptions,
   ) {
     const password = opts.password ?? '';
-    const username = opts.username ?? 'open-sigint';
+    const username = opts.username ?? 'fourscore';
     super(host, port, 'SND', password, username);
 
     this.opts = {
@@ -57,12 +56,15 @@ export class AudioStream extends BaseStream implements AudioStreamEvents {
     const o = this.opts;
     this.send(`SET mod=${o.mode} low_cut=${o.lowCut} high_cut=${o.highCut} freq=${o.frequency.toFixed(3)}`);
     this.send(`SET agc=${o.agc ? 1 : 0} hang=${o.agcHang ? 1 : 0} thresh=${o.agcThresh} slope=${o.agcSlope} decay=${o.agcDecay} manGain=${o.manGain}`);
-    this.send(`SET AR OK in=${INPUT_SAMPLE_RATE} out=${o.sampleRate}`);
     this.send(`SET compression=${o.compression ? 1 : 0}`);
     this.send(`SET squelch=${o.squelch ? 1 : 0} max=${o.squelchMax}`);
   }
 
   protected onMsg(params: Record<string, string>): void {
+    // Server sends audio_rate once the SND task is fully initialised — respond with SET AR OK
+    if (params['audio_rate'] !== undefined) {
+      this.send(`SET AR OK in=${params['audio_rate']} out=${this.opts.sampleRate}`);
+    }
     // Server sends initial ADPCM state so the decoder is in sync
     if (params['audio_adpcm_state'] !== undefined) {
       const [idx, prev] = params['audio_adpcm_state'].split(',').map(Number);

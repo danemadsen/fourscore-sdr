@@ -71,8 +71,17 @@ export default function App() {
     });
 
     astream.on('audio', ({ samples, rssi: r }) => {
+      console.log('[kiwi audio SND packet] samples:', samples.length, 'rssi:', r);
       audio.play(samples);
       setRssi(r);
+    });
+
+    astream.on('smeter', (rssi) => {
+      console.log('[kiwi smeter]', rssi);
+    });
+
+    astream.on('msg', (params) => {
+      console.log('[kiwi audio msg]', params);
     });
 
     astream.on('error', (err) => {
@@ -81,9 +90,10 @@ export default function App() {
       setConnected(false);
     });
 
-    astream.on('close', () => {
+    astream.on('close', (code: number, reason: string) => {
+      console.log('[kiwi audio close]', code, reason);
       setConnected(false);
-      setStatus('DISCONNECTED');
+      setStatus(`DISCONNECTED (${code}${reason ? ': ' + reason : ''})`);
     });
 
     // Waterfall stream
@@ -95,11 +105,25 @@ export default function App() {
     wfStreamRef.current = wfstream;
 
     wfstream.on('waterfall', (data) => {
+      console.log('[kiwi WF packet] bins:', data.bins.length);
       wfRef.current?.addRow(data);
     });
 
+    wfstream.on('msg', (params) => {
+      console.log('[kiwi wf msg]', params);
+    });
+
+    wfstream.on('open', () => {
+      console.log('[kiwi wf open]');
+    });
+
     wfstream.on('error', (err) => {
+      console.log('[kiwi wf error]', err.message);
       setError(err.message);
+    });
+
+    wfstream.on('close', (code: number, reason: string) => {
+      console.log('[kiwi wf close]', code, reason);
     });
   }, [connected, disconnect, frequency, mode, agc, zoom, centerFreq, audio]);
 

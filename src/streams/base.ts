@@ -1,6 +1,6 @@
 import { parseMsgBody } from '../utils/msg';
 
-const KEEPALIVE_INTERVAL_MS = 5000;
+const KEEPALIVE_INTERVAL_MS = 1000;
 
 class EventEmitter {
   private _listeners: Map<string, ((...args: any[]) => void)[]> = new Map();
@@ -28,9 +28,15 @@ const ascii = new TextDecoder('windows-1252');
 const utf8 = new TextDecoder('utf-8');
 
 export abstract class BaseStream extends EventEmitter {
-  protected ws: WebSocket;
+  protected ws: WebSocket | null = null;
   private keepaliveTimer: number | null = null;
   private closed = false;
+  private streamStarted = false;
+
+  /** Default trigger: fire once auth is confirmed (badp=0). Subclasses may override. */
+  protected isStreamReady(params: Record<string, string>): boolean {
+    return params['badp'] === '0';
+  }
 
   constructor(
     protected readonly host: string,
@@ -41,19 +47,31 @@ export abstract class BaseStream extends EventEmitter {
   ) {
     super();
 
-    const timestamp = Math.floor(Date.now() / 1000);
-    const url = `ws://${host}:${port}/${timestamp}/${streamType}`;
-    this.ws = new WebSocket(url);
-    this.ws.binaryType = 'arraybuffer';
+    fetch(`http://${host}:${port}/VER`)
+      .then(r => r.json() as Promise<{ ts: number }>)
+      .then(ver => {
+        if (this.closed) return;
+        const url = `ws://${host}:${port}/ws/kiwi/${ver.ts}/${streamType}`;
+        this._connect(url, streamType, password, username);
+      })
+      .catch(() => {
+        // VER fetch failed — fall back to old-style URL with local timestamp
+        if (this.closed) return;
+        const ts = Math.floor(Date.now() / 1000);
+        const url = `ws://${host}:${port}/${ts}/${streamType}`;
+        this._connect(url, streamType, password, username);
+      });
+  }
 
-    this.ws.addEventListener('open', () => {
-      // Identify ourselves then authenticate
-      this.send(`SERVER DE CLIENT open-sigint.js ${streamType}`);
+  private _connect(url: string, streamType: string, password: string, username: string): void {
+    const ws = new WebSocket(url);
+    this.ws = ws;
+    ws.binaryType = 'arraybuffer';
+
+    ws.addEventListener('open', () => {
+      this.send(`SERVER DE CLIENT openwebrx.js ${streamType}`);
       this.sendAuth(password);
       if (username) this.send(`SET ident_user=${username}`);
-      this.onOpen();
-      this.keepaliveTimer = setInterval(() => this.send('SET keepalive'), KEEPALIVE_INTERVAL_MS) as unknown as number;
-      this.emit('open');
     });
 
     this.ws.addEventListener('message', (event: MessageEvent) => {
@@ -70,6 +88,20 @@ export abstract class BaseStream extends EventEmitter {
 
       if (tag === 'MSG') {
         const params = parseMsgBody(utf8.decode(body));
+
+        if ('badp' in params && params['badp'] !== '0') {
+          this.emit('error', new Error(`KiwiSDR rejected auth (badp=${params['badp']})`));
+          return;
+        }
+
+        if (!this.streamStarted && this.isStreamReady(params)) {
+          this.streamStarted = true;
+          this.onOpen();
+          this.send('SET keepalive');
+          this.keepaliveTimer = setInterval(() => this.send('SET keepalive'), KEEPALIVE_INTERVAL_MS) as unknown as number;
+          this.emit('open');
+        }
+
         this.onMsg(params);
         this.emit('msg', params);
       } else {
@@ -88,7 +120,7 @@ export abstract class BaseStream extends EventEmitter {
   }
 
   protected send(msg: string): void {
-    if (this.ws.readyState === WebSocket.OPEN) {
+    if (this.ws !== null && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(msg);
     }
   }
@@ -97,8 +129,7 @@ export abstract class BaseStream extends EventEmitter {
     this.send(`SET auth t=kiwi p=${password}`);
   }
 
-  /** Called once after the WebSocket opens, before keepalive starts.
-   *  Subclasses send their stream-specific SET commands here. */
+  /** Called once the stream is ready. Subclasses send their SET commands here. */
   protected abstract onOpen(): void;
 
   /** Called for each parsed MSG frame. */
@@ -118,6 +149,6 @@ export abstract class BaseStream extends EventEmitter {
     if (this.closed) return;
     this.closed = true;
     this.cleanup();
-    this.ws.close();
+    this.ws?.close();
   }
 }
