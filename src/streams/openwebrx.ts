@@ -6,6 +6,24 @@ import { MODE_CUTS } from '../modes';
 /** Number of ADPCM padding samples to discard from the start of each FFT frame */
 const COMPRESS_FFT_PAD_N = 10;
 
+/**
+ * Maps our internal AudioMode names to the modulation strings OpenWebRX understands.
+ * OpenWebRX accepts: am, sam, lsb, usb, cw, nfm, wfm (and digital modes).
+ * Variants like amn/amw/lsn/nbfm have no direct equivalent — map to the closest.
+ */
+const OWRX_MODE_MAP: Record<string, string> = {
+  am:   'am',   amn:  'am',   amw:  'am',
+  sam:  'sam',  sal:  'sam',  sau:  'sam',  sas: 'sam',
+  qam:  'am',
+  lsb:  'lsb',  lsn:  'lsb',
+  usb:  'usb',  usn:  'usb',
+  cw:   'cw',   cwn:  'cw',
+  nbfm: 'nfm',  nnfm: 'nfm',
+  wfm:  'wfm',
+  iq:   'iq',
+  drm:  'drm',
+};
+
 export interface OpenWebRXConfig {
   centerFreq: number;  // Hz
   bandwidth:  number;  // Hz (samp_rate)
@@ -50,6 +68,7 @@ export class OpenWebRXStream extends EventEmitter implements OpenWebRXStreamEven
   private waterfallMax = 0;
   private sequence = 0;
   private dspStarted = false;
+  private openEmitted = false;
   private readonly opts: ResolvedOptions;
 
   constructor(host: string, port: number, opts: OpenWebRXStreamOptions) {
@@ -131,9 +150,16 @@ export class OpenWebRXStream extends EventEmitter implements OpenWebRXStreamEven
           waterfallMax:     this.waterfallMax,
           fftSize,
         });
-        // Server is ready — start DSP (offset_freq computed from center_freq)
-        this._sendDspControl();
-        this.emit('open');
+        // Only start DSP once we have a valid config with real samp_rate.
+        // The server sends 2-3 rapid config messages during startup; the first
+        // ones have samp_rate=0 and would restart the DSP pipeline with wrong params.
+        if (this.bandwidth > 0) {
+          this._sendDspControl();
+          if (!this.openEmitted) {
+            this.openEmitted = true;
+            this.emit('open');
+          }
+        }
         break;
       }
 
@@ -154,6 +180,7 @@ export class OpenWebRXStream extends EventEmitter implements OpenWebRXStreamEven
     const data = buf.slice(1);
     if (type === 1) this._handleWaterfall(data);
     else if (type === 2) this._handleAudio(data);
+    else if (type === 4) this._handleAudio(data);  // HD audio (WFM)
   }
 
   private _handleAudio(data: ArrayBuffer): void {
@@ -191,13 +218,14 @@ export class OpenWebRXStream extends EventEmitter implements OpenWebRXStreamEven
     const offsetHz = this.centerFreq > 0
       ? Math.round(this.opts.frequency * 1000) - this.centerFreq
       : 0;
+    const mod = OWRX_MODE_MAP[this.opts.mode] ?? this.opts.mode;
     this._sendJson({
       type: 'dspcontrol',
       params: {
         low_cut:       this.opts.lowCut,
         high_cut:      this.opts.highCut,
         offset_freq:   offsetHz,
-        mod:           this.opts.mode,
+        mod,
         squelch_level: this.opts.squelch,
       },
     });

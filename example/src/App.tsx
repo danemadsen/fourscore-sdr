@@ -33,7 +33,7 @@ export default function App() {
   const [agc, setAgc]                 = useState(true);
   const [volume, setVolume]           = useState(0.8);
   const [rssi, setRssi]               = useState(-127);
-  const [wfMinDb, setWfMinDb]         = useState(-120);
+  const [wfMinDb, setWfMinDb]         = useState(-75);
   const [wfMaxDb, setWfMaxDb]         = useState(-20);
   const [wfCanvasWidth, setWfCanvasWidth] = useState(1024);
   const [error, setError]             = useState<string | null>(null);
@@ -80,7 +80,7 @@ export default function App() {
 
     if (sdrType === 'kiwi') {
       // ── KiwiSDR ────────────────────────────────────────────────────────────
-      setWfMinDb(-120);
+      setWfMinDb(-75);
       setWfMaxDb(-20);
       setWfCanvasWidth(1024);
       const client = new KiwiSDR({ host: kiwiAddr.host, port: kiwiAddr.port });
@@ -277,7 +277,10 @@ export default function App() {
         <div className="ctrl-group">
           <span className="ctrl-label">Mode</span>
           <select className="mode-select" value={mode} onChange={handleModeChange}>
-            {AUDIO_MODES.map(m => (
+            {(sdrType === 'openwebrx'
+              ? (['am', 'sam', 'lsb', 'usb', 'cw', 'nbfm', 'wfm'] as const)
+              : AUDIO_MODES
+            ).map(m => (
               <option key={m} value={m}>{m.toUpperCase()}</option>
             ))}
           </select>
