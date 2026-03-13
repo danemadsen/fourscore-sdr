@@ -139,9 +139,12 @@ export class OpenWebRXStream extends EventEmitter implements OpenWebRXStreamEven
         break;
       }
 
-      case 'smeter':
-        this.emit('smeter', (msg['value'] as number) ?? -127);
+      case 'smeter': {
+        // Server sends raw linear power; convert to dB as the reference client does
+        const raw = (msg['value'] as number) ?? 0;
+        this.emit('smeter', raw > 0 ? 10 * Math.log10(raw) : -127);
         break;
+      }
 
       default:
         this.emit('msg', msg);

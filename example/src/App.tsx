@@ -265,6 +265,32 @@ export default function App() {
 
         <span className="sep">|</span>
 
+        <div className="ctrl-group">
+          <span className="ctrl-label">Max dB</span>
+          <input
+            className="vol-slider"
+            type="range" min="-100" max="0" step="5"
+            value={wfMaxDb}
+            onChange={e => setWfMaxDb(parseInt(e.target.value))}
+            title={`Waterfall max: ${wfMaxDb} dB`}
+          />
+          <span style={{ color: '#c8d8e8', fontSize: '10px', minWidth: '28px' }}>{wfMaxDb}</span>
+        </div>
+
+        <div className="ctrl-group">
+          <span className="ctrl-label">Min dB</span>
+          <input
+            className="vol-slider"
+            type="range" min="-200" max="-20" step="5"
+            value={wfMinDb}
+            onChange={e => setWfMinDb(parseInt(e.target.value))}
+            title={`Waterfall min: ${wfMinDb} dB`}
+          />
+          <span style={{ color: '#c8d8e8', fontSize: '10px', minWidth: '28px' }}>{wfMinDb}</span>
+        </div>
+
+        <span className="sep">|</span>
+
         <button className={`btn connect ${connected ? 'connected' : ''}`} onClick={connect}>
           {connected ? '⏹ DISCONNECT' : '▶ CONNECT'}
         </button>
