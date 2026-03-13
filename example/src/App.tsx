@@ -102,7 +102,12 @@ export default function App() {
         setConnected(false);
         setStatus(`DISCONNECTED (${code}${reason ? ': ' + reason : ''})`);
       });
-      stream.on('waterfall', ({ bins, centerFreq: cf, bandwidth }: OpenWebRXWaterfallData) => {
+      // Config fires once — update the frequency axis then, not per waterfall frame
+      stream.on('config', ({ centerFreq: cf, bandwidth }: { centerFreq: number; bandwidth: number }) => {
+        setWfCenter(cf / 1000);
+        setWfBandwidth(bandwidth / 1000);
+      });
+      stream.on('waterfall', ({ bins }: OpenWebRXWaterfallData) => {
         // Convert Float32 dB values to the KiwiSDR uint8 wire encoding (byte = dB + 255)
         const u8 = new Uint8Array(bins.length);
         for (let i = 0; i < bins.length; i++) {
@@ -110,8 +115,6 @@ export default function App() {
         }
         const data: WaterfallData = { bins: u8, sequence: 0, xBin: 0, zoom: 0, flags: 0 };
         wfRef.current?.addRow(data);
-        setWfCenter(cf / 1000);
-        setWfBandwidth(bandwidth / 1000);
       });
     }
   }, [connected, disconnect, sdrType, frequency, mode, lowCut, highCut, agc, zoom, centerFreq, audio]);

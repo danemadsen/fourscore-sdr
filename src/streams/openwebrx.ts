@@ -6,10 +6,18 @@ import { MODE_CUTS } from '../modes';
 /** Number of ADPCM padding samples to discard from the start of each FFT frame */
 const COMPRESS_FFT_PAD_N = 10;
 
+export interface OpenWebRXConfig {
+  centerFreq: number;  // Hz
+  bandwidth:  number;  // Hz (samp_rate)
+  audioCompression: string;
+  fftCompression: string;
+}
+
 export interface OpenWebRXStreamEvents {
   on(event: 'open',      listener: () => void): this;
   on(event: 'close',     listener: (code: number, reason: string) => void): this;
   on(event: 'error',     listener: (err: Error) => void): this;
+  on(event: 'config',    listener: (cfg: OpenWebRXConfig) => void): this;
   on(event: 'msg',       listener: (msg: Record<string, unknown>) => void): this;
   on(event: 'audio',     listener: (data: AudioData) => void): this;
   on(event: 'waterfall', listener: (data: OpenWebRXWaterfallData) => void): this;
@@ -48,7 +56,7 @@ export class OpenWebRXStream extends EventEmitter implements OpenWebRXStreamEven
       mode:       opts.mode,
       lowCut:     opts.lowCut  ?? cuts.lowCut,
       highCut:    opts.highCut ?? cuts.highCut,
-      outputRate: opts.outputRate ?? 48000,
+      outputRate: opts.outputRate ?? 12000,
       squelch:    opts.squelch ?? -150,
       username:   opts.username ?? 'fourscore',
     };
@@ -60,7 +68,12 @@ export class OpenWebRXStream extends EventEmitter implements OpenWebRXStreamEven
     ws.binaryType = 'arraybuffer';
 
     ws.addEventListener('open', () => {
+      // Send both messages immediately on connect (same as the reference client)
       ws.send('SERVER DE CLIENT client=openwebrx.js type=receiver');
+      this._sendJson({
+        type: 'connectionproperties',
+        params: { output_rate: this.opts.outputRate, hd_output_rate: this.opts.outputRate },
+      });
     });
 
     ws.addEventListener('message', (event: MessageEvent) => {
@@ -81,17 +94,7 @@ export class OpenWebRXStream extends EventEmitter implements OpenWebRXStreamEven
   }
 
   private _handleText(text: string): void {
-    if (text.startsWith('CLIENT DE SERVER')) {
-      // Server acknowledged handshake — send connection properties
-      this._sendJson({
-        type: 'connectionproperties',
-        params: {
-          output_rate:    this.opts.outputRate,
-          hd_output_rate: this.opts.outputRate,
-        },
-      });
-      return;
-    }
+    if (text.startsWith('CLIENT DE SERVER')) return;  // acknowledged, nothing to do
 
     let msg: Record<string, unknown>;
     try {
@@ -101,14 +104,21 @@ export class OpenWebRXStream extends EventEmitter implements OpenWebRXStreamEven
     }
 
     const type = msg['type'] as string | undefined;
-    const params = (msg['params'] ?? {}) as Record<string, unknown>;
+    // Config fields are under msg['value'], not msg['params']
+    const value = (msg['value'] ?? {}) as Record<string, unknown>;
 
     switch (type) {
       case 'config':
-        this.audioCompression = (params['audio_compression'] as string) ?? 'none';
-        this.fftCompression   = (params['fft_compression']   as string) ?? 'none';
-        this.centerFreq       = (params['center_freq']       as number) ?? 0;
-        this.bandwidth        = (params['samp_rate']         as number) ?? 0;
+        this.audioCompression = (value['audio_compression'] as string) ?? 'none';
+        this.fftCompression   = (value['fft_compression']   as string) ?? 'none';
+        this.centerFreq       = (value['center_freq']       as number) ?? 0;
+        this.bandwidth        = (value['samp_rate']         as number) ?? 0;
+        this.emit('config', {
+          centerFreq:       this.centerFreq,
+          bandwidth:        this.bandwidth,
+          audioCompression: this.audioCompression,
+          fftCompression:   this.fftCompression,
+        });
         // Server is ready — set frequency and start DSP
         this._sendJson({
           type:   'setfrequency',
@@ -119,7 +129,7 @@ export class OpenWebRXStream extends EventEmitter implements OpenWebRXStreamEven
         break;
 
       case 'smeter':
-        this.emit('smeter', (params['S'] as number) ?? -127);
+        this.emit('smeter', (msg['value'] as number) ?? -127);
         break;
 
       default:
@@ -160,7 +170,8 @@ export class OpenWebRXStream extends EventEmitter implements OpenWebRXStreamEven
       bins = new Float32Array(trimmed.length);
       for (let i = 0; i < trimmed.length; i++) bins[i] = trimmed[i] / 100;
     } else {
-      bins = new Float32Array(data);
+      // Truncate to nearest 4-byte boundary — server may pad the frame
+      bins = new Float32Array(data, 0, Math.floor(data.byteLength / 4));
     }
     this.emit('waterfall', { bins, centerFreq: this.centerFreq, bandwidth: this.bandwidth });
   }
