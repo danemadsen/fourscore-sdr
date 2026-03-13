@@ -33,6 +33,8 @@ export default function App() {
   const [agc, setAgc]                 = useState(true);
   const [volume, setVolume]           = useState(0.8);
   const [rssi, setRssi]               = useState(-127);
+  const [wfMinDb, setWfMinDb]         = useState(-120);
+  const [wfMaxDb, setWfMaxDb]         = useState(-20);
   const [error, setError]             = useState<string | null>(null);
   const [status, setStatus]           = useState('DISCONNECTED');
 
@@ -67,6 +69,8 @@ export default function App() {
 
     if (sdrType === 'kiwi') {
       // ── KiwiSDR ────────────────────────────────────────────────────────────
+      setWfMinDb(-120);
+      setWfMaxDb(-20);
       const client = new KiwiSDR({ host: kiwiAddr.host, port: kiwiAddr.port });
 
       const astream = client.openAudioStream({ frequency, mode, lowCut, highCut, agc, sampleRate: 12000 });
@@ -103,9 +107,12 @@ export default function App() {
         setStatus(`DISCONNECTED (${code}${reason ? ': ' + reason : ''})`);
       });
       // Config fires once — update the frequency axis then, not per waterfall frame
-      stream.on('config', ({ centerFreq: cf, bandwidth }: { centerFreq: number; bandwidth: number }) => {
+      stream.on('config', ({ centerFreq: cf, bandwidth, waterfallMin, waterfallMax }: { centerFreq: number; bandwidth: number; waterfallMin: number; waterfallMax: number }) => {
         setWfCenter(cf / 1000);
         setWfBandwidth(bandwidth / 1000);
+        // Use server levels if they were explicitly set (not the default -150/0)
+        setWfMinDb(waterfallMin !== -150 ? waterfallMin : -120);
+        setWfMaxDb(waterfallMax !== 0    ? waterfallMax : -20);
       });
       stream.on('waterfall', ({ bins }: OpenWebRXWaterfallData) => {
         // Convert Float32 dB values to the KiwiSDR uint8 wire encoding (byte = dB + 255)
@@ -277,8 +284,8 @@ export default function App() {
         tuneFreq={frequency}
         lowCut={lowCut}
         highCut={highCut}
-        minDb={-120}
-        maxDb={-20}
+        minDb={wfMinDb}
+        maxDb={wfMaxDb}
         onTune={handleTune}
       />
 

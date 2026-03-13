@@ -11,6 +11,8 @@ export interface OpenWebRXConfig {
   bandwidth:  number;  // Hz (samp_rate)
   audioCompression: string;
   fftCompression: string;
+  waterfallMin: number;  // dB
+  waterfallMax: number;  // dB
 }
 
 export interface OpenWebRXStreamEvents {
@@ -43,7 +45,10 @@ export class OpenWebRXStream extends EventEmitter implements OpenWebRXStreamEven
   private fftCompression = 'none';
   private centerFreq = 0;
   private bandwidth = 0;
+  private waterfallMin = -150;
+  private waterfallMax = 0;
   private sequence = 0;
+  private dspStarted = false;
   private readonly magicKey: string;
   private readonly opts: ResolvedOptions;
 
@@ -108,16 +113,21 @@ export class OpenWebRXStream extends EventEmitter implements OpenWebRXStreamEven
     const value = (msg['value'] ?? {}) as Record<string, unknown>;
 
     switch (type) {
-      case 'config':
+      case 'config': {
         this.audioCompression = (value['audio_compression'] as string) ?? 'none';
         this.fftCompression   = (value['fft_compression']   as string) ?? 'none';
         this.centerFreq       = (value['center_freq']       as number) ?? 0;
         this.bandwidth        = (value['samp_rate']         as number) ?? 0;
+        const wfLevels = value['waterfall_levels'] as { min?: number; max?: number } | undefined;
+        this.waterfallMin = wfLevels?.min ?? -150;
+        this.waterfallMax = wfLevels?.max ?? 0;
         this.emit('config', {
           centerFreq:       this.centerFreq,
           bandwidth:        this.bandwidth,
           audioCompression: this.audioCompression,
           fftCompression:   this.fftCompression,
+          waterfallMin:     this.waterfallMin,
+          waterfallMax:     this.waterfallMax,
         });
         // Server is ready — set frequency and start DSP
         this._sendJson({
@@ -127,6 +137,7 @@ export class OpenWebRXStream extends EventEmitter implements OpenWebRXStreamEven
         this._sendDspControl();
         this.emit('open');
         break;
+      }
 
       case 'smeter':
         this.emit('smeter', (msg['value'] as number) ?? -127);
@@ -147,15 +158,11 @@ export class OpenWebRXStream extends EventEmitter implements OpenWebRXStreamEven
   private _handleAudio(data: ArrayBuffer): void {
     let samples: Int16Array;
     if (this.audioCompression === 'adpcm') {
-      this.audioDecoder.reset();
-      samples = this.audioDecoder.decode(new Uint8Array(data));
+      // Do NOT reset — decodeWithSync maintains state across frames
+      samples = this.audioDecoder.decodeWithSync(new Uint8Array(data));
     } else {
-      // Raw big-endian 16-bit PCM
-      const view = new DataView(data);
-      samples = new Int16Array(data.byteLength / 2);
-      for (let i = 0; i < samples.length; i++) {
-        samples[i] = view.getInt16(i * 2, false);
-      }
+      // Raw little-endian 16-bit PCM
+      samples = new Int16Array(data);
     }
     const audioData: AudioData = { samples, rssi: -127, sequence: this.sequence++, flags: 0 };
     this.emit('audio', audioData);
@@ -180,13 +187,17 @@ export class OpenWebRXStream extends EventEmitter implements OpenWebRXStreamEven
     this._sendJson({
       type: 'dspcontrol',
       params: {
-        low_cut:      this.opts.lowCut,
-        high_cut:     this.opts.highCut,
-        offset_freq:  0,
-        mod:          this.opts.mode,
+        low_cut:       this.opts.lowCut,
+        high_cut:      this.opts.highCut,
+        offset_freq:   0,
+        mod:           this.opts.mode,
         squelch_level: this.opts.squelch,
       },
     });
+    if (!this.dspStarted) {
+      this.dspStarted = true;
+      this._sendJson({ type: 'dspcontrol', action: 'start' });
+    }
   }
 
   private _sendJson(msg: object): void {
