@@ -93,8 +93,8 @@ export interface AudioData {
 }
 
 export interface WaterfallData {
-  /** FFT bin magnitudes (0-255 each) */
-  bins: Uint8Array;
+  /** FFT bin magnitudes: Uint8Array (KiwiSDR: byte = dBm+255) or Float32Array (raw dB, e.g. OpenWebRX) */
+  bins: Uint8Array | Float32Array;
   /** Packet sequence number */
   sequence: number;
   /** Starting FFT bin index on server */

@@ -96,12 +96,13 @@ export const Waterfall = forwardRef<WaterfallHandle, WaterfallProps>(
       const row = rowBufRef.current ?? ctx.createImageData(CANVAS_W, 1);
       const pixels = row.data;
       const bins = data.bins;
+      const isFloat = bins instanceof Float32Array;
       const range = maxDb - minDb || 1;
       for (let i = 0; i < CANVAS_W; i++) {
         // Nearest-neighbour scale: map canvas pixel i → bin index
         const binIdx = Math.min(bins.length - 1, Math.floor(i * bins.length / CANVAS_W));
-        // Server encodes dBm as: byte = dBm + 255  →  dBm = byte - 255
-        const dBm = bins[binIdx] - 255;
+        // Float32Array = raw dB (OpenWebRX); Uint8Array = KiwiSDR encoding (byte = dBm+255)
+        const dBm = isFloat ? (bins as Float32Array)[binIdx] : (bins as Uint8Array)[binIdx] - 255;
         const v = Math.max(0, Math.min(255, Math.round((dBm - minDb) / range * 255)));
         pixels[i * 4 + 0] = COLOR_LUT[v * 3 + 0];
         pixels[i * 4 + 1] = COLOR_LUT[v * 3 + 1];

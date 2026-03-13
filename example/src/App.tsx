@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { KiwiSDR, OpenWebRX, MODE_CUTS, AUDIO_MODES } from '@fourscore/sdr';
-import type { AudioStream, WaterfallStream, OpenWebRXStream, AudioMode, AudioData, WaterfallData, OpenWebRXWaterfallData } from '@fourscore/sdr';
+import type { AudioStream, WaterfallStream, OpenWebRXStream, AudioMode, AudioData, OpenWebRXWaterfallData } from '@fourscore/sdr';
 import { Waterfall, type WaterfallHandle } from './components/Waterfall';
 import { SMeter } from './components/SMeter';
 import { useAudio } from './hooks/useAudio';
@@ -115,13 +115,8 @@ export default function App() {
         setWfMaxDb(waterfallMax !== 0    ? waterfallMax : -20);
       });
       stream.on('waterfall', ({ bins }: OpenWebRXWaterfallData) => {
-        // Convert Float32 dB values to the KiwiSDR uint8 wire encoding (byte = dB + 255)
-        const u8 = new Uint8Array(bins.length);
-        for (let i = 0; i < bins.length; i++) {
-          u8[i] = Math.max(0, Math.min(255, Math.round(bins[i] + 255)));
-        }
-        const data: WaterfallData = { bins: u8, sequence: 0, xBin: 0, zoom: 0, flags: 0 };
-        wfRef.current?.addRow(data);
+        // Pass Float32Array directly — Waterfall.addRow handles raw dB values
+        wfRef.current?.addRow({ bins, sequence: 0, xBin: 0, zoom: 0, flags: 0 });
       });
     }
   }, [connected, disconnect, sdrType, frequency, mode, lowCut, highCut, agc, zoom, centerFreq, audio]);
@@ -269,7 +264,7 @@ export default function App() {
           <span className="ctrl-label">Max dB</span>
           <input
             className="vol-slider"
-            type="range" min="-100" max="0" step="5"
+            type="range" min="-100" max="60" step="5"
             value={wfMaxDb}
             onChange={e => setWfMaxDb(parseInt(e.target.value))}
             title={`Waterfall max: ${wfMaxDb} dB`}
