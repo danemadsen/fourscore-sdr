@@ -44,32 +44,34 @@ export abstract class BaseStream extends EventEmitter {
     streamType: 'SND' | 'W/F',
     password: string,
     username: string,
+    /** Optional pre-fetched VER timestamp. Pass from KiwiSDR to share one fetch across streams. */
+    tsPromise?: Promise<number>,
   ) {
     super();
 
-    fetch(`http://${host}:${port}/VER`)
-      .then(r => r.json() as Promise<{ ts: number }>)
-      .then(ver => {
-        if (this.closed) return;
-        const url = `ws://${host}:${port}/ws/kiwi/${ver.ts}/${streamType}`;
-        this._connect(url, streamType, password, username);
-      })
-      .catch(() => {
-        // VER fetch failed — fall back to old-style URL with local timestamp
-        if (this.closed) return;
-        const ts = Math.floor(Date.now() / 1000);
-        const url = `ws://${host}:${port}/${ts}/${streamType}`;
-        this._connect(url, streamType, password, username);
-      });
+    const resolvedTsPromise = tsPromise ?? BaseStream._fetchTs(host, port);
+
+    resolvedTsPromise.then(ts => {
+      if (this.closed) return;
+      const url = `ws://${host}:${port}/ws/kiwi/${ts}/${streamType}`;
+      this._connect(url, password, username);
+    });
   }
 
-  private _connect(url: string, streamType: string, password: string, username: string): void {
+  private static _fetchTs(host: string, port: number): Promise<number> {
+    return fetch(`http://${host}:${port}/VER`)
+      .then(r => r.json() as Promise<{ ts: number }>)
+      .then(ver => ver.ts)
+      .catch(() => Math.floor(Date.now() / 1000));
+  }
+
+  private _connect(url: string, password: string, username: string): void {
+    console.log(`[fourscore-sdr] connecting to ${url}`);
     const ws = new WebSocket(url);
     this.ws = ws;
     ws.binaryType = 'arraybuffer';
 
     ws.addEventListener('open', () => {
-      this.send(`SERVER DE CLIENT openwebrx.js ${streamType}`);
       this.sendAuth(password);
       if (username) this.send(`SET ident_user=${username}`);
     });
@@ -126,7 +128,9 @@ export abstract class BaseStream extends EventEmitter {
   }
 
   private sendAuth(password: string): void {
-    this.send(`SET auth t=kiwi p=${password}`);
+    // KiwiSDR convention: use '#' to represent an empty/no password
+    const p = password !== '' ? password : '#';
+    this.send(`SET auth t=kiwi p=${p}`);
   }
 
   /** Called once the stream is ready. Subclasses send their SET commands here. */

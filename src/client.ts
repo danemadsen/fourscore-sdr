@@ -15,6 +15,17 @@ export class KiwiSDR {
   private readonly host: string;
   private readonly port: number;
   private readonly password: string;
+  private _tsPromise: Promise<number> | null = null;
+
+  private _getTs(): Promise<number> {
+    if (!this._tsPromise) {
+      this._tsPromise = fetch(`http://${this.host}:${this.port}/VER`)
+        .then(r => r.json() as Promise<{ ts: number }>)
+        .then(ver => ver.ts)
+        .catch(() => Math.floor(Date.now() / 1000));
+    }
+    return this._tsPromise;
+  }
 
   /**
    * Create a KiwiSDR client.
@@ -62,7 +73,7 @@ export class KiwiSDR {
       ...opts,
       password: opts.password ?? this.password,
     };
-    return new AudioStream(this.host, this.port, merged);
+    return new AudioStream(this.host, this.port, merged, this._getTs());
   }
 
   /**
@@ -85,7 +96,7 @@ export class KiwiSDR {
       ...opts,
       password: opts.password ?? this.password,
     };
-    return new WaterfallStream(this.host, this.port, merged);
+    return new WaterfallStream(this.host, this.port, merged, this._getTs());
   }
 
   /**

@@ -23,10 +23,11 @@ export class WaterfallStream extends BaseStream implements WaterfallStreamEvents
     host: string,
     port: number,
     opts: WaterfallStreamOptions,
+    tsPromise?: Promise<number>,
   ) {
     const password = opts.password ?? '';
     const username = opts.username ?? 'fourscore';
-    super(host, port, 'W/F', password, username);
+    super(host, port, 'W/F', password, username, tsPromise);
 
     this.opts = {
       zoom:        opts.zoom        ?? 0,
@@ -39,6 +40,11 @@ export class WaterfallStream extends BaseStream implements WaterfallStreamEvents
       password,
       username,
     };
+  }
+
+  /** Trigger when the server sends wf_setup, signalling the waterfall channel is ready. */
+  protected isStreamReady(params: Record<string, string>): boolean {
+    return 'wf_setup' in params;
   }
 
   protected onOpen(): void {

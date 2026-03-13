@@ -27,10 +27,11 @@ export class AudioStream extends BaseStream implements AudioStreamEvents {
     host: string,
     port: number,
     opts: AudioStreamOptions,
+    tsPromise?: Promise<number>,
   ) {
     const password = opts.password ?? '';
     const username = opts.username ?? 'fourscore';
-    super(host, port, 'SND', password, username);
+    super(host, port, 'SND', password, username, tsPromise);
 
     this.opts = {
       frequency:   opts.frequency,
@@ -52,6 +53,11 @@ export class AudioStream extends BaseStream implements AudioStreamEvents {
     };
   }
 
+  /** Trigger as soon as sample_rate arrives — the very first MSG from the server. */
+  protected isStreamReady(params: Record<string, string>): boolean {
+    return 'sample_rate' in params;
+  }
+
   protected onOpen(): void {
     const o = this.opts;
     this.send(`SET mod=${o.mode} low_cut=${o.lowCut} high_cut=${o.highCut} freq=${o.frequency.toFixed(3)}`);
@@ -61,7 +67,7 @@ export class AudioStream extends BaseStream implements AudioStreamEvents {
   }
 
   protected onMsg(params: Record<string, string>): void {
-    // Server sends audio_rate once the SND task is fully initialised — respond with SET AR OK
+    // Resend AR OK with the server's actual input rate if it differs from our initial guess
     if (params['audio_rate'] !== undefined) {
       this.send(`SET AR OK in=${params['audio_rate']} out=${this.opts.sampleRate}`);
     }
