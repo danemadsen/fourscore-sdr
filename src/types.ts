@@ -1,8 +1,11 @@
 export type AudioMode =
   | 'am' | 'amn' | 'amw'
-  | 'lsb' | 'usb'
+  | 'sam' | 'sal' | 'sau' | 'sas'
+  | 'qam'
+  | 'lsb' | 'lsn'
+  | 'usb' | 'usn'
   | 'cw' | 'cwn'
-  | 'nbfm'
+  | 'nbfm' | 'nnfm' | 'wfm'
   | 'iq'
   | 'drm';
 

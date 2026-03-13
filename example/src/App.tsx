@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { KiwiSDR } from '@fourscore/sdr';
+import { KiwiSDR, MODE_CUTS, AUDIO_MODES } from '@fourscore/sdr';
 import type { AudioStream, WaterfallStream, AudioMode } from '@fourscore/sdr';
 import { Waterfall, type WaterfallHandle } from './components/Waterfall';
 import { SMeter } from './components/SMeter';
@@ -10,27 +10,13 @@ const parsed = new URL(SDR_URL);
 const SDR_HOST = parsed.hostname;
 const SDR_PORT = parseInt(parsed.port) || 8073;
 
-const MODES: AudioMode[] = ['am', 'amn', 'amw', 'lsb', 'usb', 'cw', 'cwn', 'nbfm', 'iq'];
-
-const MODE_CUTS: Record<string, { low: number; high: number }> = {
-  am:   { low: -4900, high: 4900 },
-  amn:  { low: -2500, high: 2500 },
-  amw:  { low: -8000, high: 8000 },
-  lsb:  { low: -2700, high: -300 },
-  usb:  { low:  300,  high: 2700 },
-  cw:   { low: -500,  high:  500 },
-  cwn:  { low: -250,  high:  250 },
-  nbfm: { low: -6000, high: 6000 },
-  iq:   { low: -5000, high: 5000 },
-};
-
 export default function App() {
   const [connected, setConnected] = useState(false);
   const [frequency, setFrequency] = useState(7200);
   const [freqInput, setFreqInput] = useState('7200');
   const [mode, setMode] = useState<AudioMode>('lsb');
-  const [lowCut, setLowCut] = useState(MODE_CUTS.lsb.low);
-  const [highCut, setHighCut] = useState(MODE_CUTS.lsb.high);
+  const [lowCut, setLowCut] = useState(MODE_CUTS.lsb.lowCut);
+  const [highCut, setHighCut] = useState(MODE_CUTS.lsb.highCut);
   const [zoom, setZoom] = useState(0);
   const [centerFreq, setCenterFreq] = useState(15000);
   const [agc, setAgc] = useState(true);
@@ -171,11 +157,11 @@ export default function App() {
 
   const handleModeChange = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
     const m = e.target.value as AudioMode;
-    const cuts = MODE_CUTS[m] ?? { low: -2700, high: 2700 };
+    const cuts = MODE_CUTS[m];
     setMode(m);
-    setLowCut(cuts.low);
-    setHighCut(cuts.high);
-    audioStreamRef.current?.tune(frequency, m, cuts.low, cuts.high);
+    setLowCut(cuts.lowCut);
+    setHighCut(cuts.highCut);
+    audioStreamRef.current?.tune(frequency, m, cuts.lowCut, cuts.highCut);
   }, [frequency]);
 
   const handleZoomChange = useCallback((delta: number) => {
@@ -223,7 +209,7 @@ export default function App() {
         <div className="ctrl-group">
           <span className="ctrl-label">Mode</span>
           <select className="mode-select" value={mode} onChange={handleModeChange}>
-            {MODES.map(m => (
+            {AUDIO_MODES.map(m => (
               <option key={m} value={m}>{m.toUpperCase()}</option>
             ))}
           </select>
