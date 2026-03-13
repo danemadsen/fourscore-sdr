@@ -49,6 +49,7 @@ export class WaterfallStream extends BaseStream implements WaterfallStreamEvents
 
   protected onOpen(): void {
     const o = this.opts;
+    this.send(`SET send_dB=1`);
     this.send(`SET zoom=${o.zoom} cf=${o.centerFreq.toFixed(3)}`);
     this.send(`SET maxdb=${o.maxDb} mindb=${o.minDb}`);
     this.send(`SET wf_speed=${o.speed}`);

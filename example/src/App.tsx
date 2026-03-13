@@ -101,6 +101,8 @@ export default function App() {
       zoom,
       centerFreq,
       speed: 4,
+      maxDb: -20,
+      minDb: -120,
     });
     wfStreamRef.current = wfstream;
 
@@ -259,6 +261,8 @@ export default function App() {
         ref={wfRef}
         centerFreq={centerFreq}
         zoom={zoom}
+        minDb={-120}
+        maxDb={-20}
         onTune={handleTune}
       />
 

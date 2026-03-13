@@ -36,6 +36,8 @@ const COLOR_LUT = new Uint8Array(256 * 3);
 interface WaterfallProps {
   centerFreq: number;
   zoom: number;
+  minDb: number;
+  maxDb: number;
   onTune: (freq: number) => void;
 }
 
@@ -47,7 +49,7 @@ const CANVAS_W = 1024;
 const CANVAS_H = 300;
 
 export const Waterfall = forwardRef<WaterfallHandle, WaterfallProps>(
-  ({ centerFreq, zoom, onTune }, ref) => {
+  ({ centerFreq, zoom, minDb, maxDb, onTune }, ref) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const rowBufRef = useRef<ImageData | null>(null);
 
@@ -76,15 +78,18 @@ export const Waterfall = forwardRef<WaterfallHandle, WaterfallProps>(
       const pixels = row.data;
       const bins = data.bins;
       const len = Math.min(bins.length, CANVAS_W);
+      const range = maxDb - minDb || 1;
       for (let i = 0; i < len; i++) {
-        const v = bins[i];
+        // Server encodes dBm as: byte = dBm + 255  →  dBm = byte - 255
+        const dBm = bins[i] - 255;
+        const v = Math.max(0, Math.min(255, Math.round((dBm - minDb) / range * 255)));
         pixels[i * 4 + 0] = COLOR_LUT[v * 3 + 0];
         pixels[i * 4 + 1] = COLOR_LUT[v * 3 + 1];
         pixels[i * 4 + 2] = COLOR_LUT[v * 3 + 2];
         pixels[i * 4 + 3] = 255;
       }
       ctx.putImageData(row, 0, 0);
-    }, []);
+    }, [minDb, maxDb]);
 
     useImperativeHandle(ref, () => ({ addRow }), [addRow]);
 
