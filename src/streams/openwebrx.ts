@@ -13,6 +13,7 @@ export interface OpenWebRXConfig {
   fftCompression: string;
   waterfallMin: number;  // dB
   waterfallMax: number;  // dB
+  fftSize: number;       // bins per waterfall frame
 }
 
 export interface OpenWebRXStreamEvents {
@@ -121,6 +122,7 @@ export class OpenWebRXStream extends EventEmitter implements OpenWebRXStreamEven
         const wfLevels = value['waterfall_levels'] as { min?: number; max?: number } | undefined;
         this.waterfallMin = wfLevels?.min ?? -150;
         this.waterfallMax = wfLevels?.max ?? 0;
+        const fftSize = (value['fft_size'] as number) ?? 1024;
         this.emit('config', {
           centerFreq:       this.centerFreq,
           bandwidth:        this.bandwidth,
@@ -128,6 +130,7 @@ export class OpenWebRXStream extends EventEmitter implements OpenWebRXStreamEven
           fftCompression:   this.fftCompression,
           waterfallMin:     this.waterfallMin,
           waterfallMax:     this.waterfallMax,
+          fftSize,
         });
         // Server is ready — set frequency and start DSP
         this._sendJson({

@@ -27,14 +27,15 @@ export default function App() {
   const [lowCut, setLowCut]           = useState(MODE_CUTS.lsb.lowCut);
   const [highCut, setHighCut]         = useState(MODE_CUTS.lsb.highCut);
   const [zoom, setZoom]               = useState(0);
-  const [centerFreq, setCenterFreq]   = useState(15000);   // kHz, KiwiSDR view center
-  const [wfCenter, setWfCenter]       = useState(15000);   // kHz, actual Waterfall center
-  const [wfBandwidth, setWfBandwidth] = useState(30000);   // kHz, actual Waterfall span
+  const [centerFreq, setCenterFreq]   = useState(15000);   // kHz, view center
+  const [wfCenter, setWfCenter]       = useState(15000);   // kHz, SDR hardware center
+  const [wfBandwidth, setWfBandwidth] = useState(30000);   // kHz, full SDR span
   const [agc, setAgc]                 = useState(true);
   const [volume, setVolume]           = useState(0.8);
   const [rssi, setRssi]               = useState(-127);
   const [wfMinDb, setWfMinDb]         = useState(-120);
   const [wfMaxDb, setWfMaxDb]         = useState(-20);
+  const [wfCanvasWidth, setWfCanvasWidth] = useState(1024);
   const [error, setError]             = useState<string | null>(null);
   const [status, setStatus]           = useState('DISCONNECTED');
 
@@ -46,6 +47,14 @@ export default function App() {
 
   const wfRef = useRef<WaterfallHandle>(null);
   const audio = useAudio();
+
+  // Refs kept in sync with state — safe to read inside stale event-handler closures
+  const zoomRef        = useRef(zoom);
+  const centerFreqRef  = useRef(centerFreq);
+  const owrxSdrCenter  = useRef(0);   // kHz — SDR hardware center, set from config
+  const owrxSdrBw      = useRef(0);   // kHz — full SDR bandwidth, set from config
+  useEffect(() => { zoomRef.current = zoom; },        [zoom]);
+  useEffect(() => { centerFreqRef.current = centerFreq; }, [centerFreq]);
 
   const disconnect = useCallback(() => {
     audioStreamRef.current?.close();
@@ -71,6 +80,7 @@ export default function App() {
       // ── KiwiSDR ────────────────────────────────────────────────────────────
       setWfMinDb(-120);
       setWfMaxDb(-20);
+      setWfCanvasWidth(1024);
       const client = new KiwiSDR({ host: kiwiAddr.host, port: kiwiAddr.port });
 
       const astream = client.openAudioStream({ frequency, mode, lowCut, highCut, agc, sampleRate: 12000 });
@@ -106,17 +116,37 @@ export default function App() {
         setConnected(false);
         setStatus(`DISCONNECTED (${code}${reason ? ': ' + reason : ''})`);
       });
-      // Config fires once — update the frequency axis then, not per waterfall frame
-      stream.on('config', ({ centerFreq: cf, bandwidth, waterfallMin, waterfallMax }: { centerFreq: number; bandwidth: number; waterfallMin: number; waterfallMax: number }) => {
-        setWfCenter(cf / 1000);
-        setWfBandwidth(bandwidth / 1000);
-        // Use server levels if they were explicitly set (not the default -150/0)
+
+      stream.on('config', ({ centerFreq: cf, bandwidth, waterfallMin, waterfallMax, fftSize }: { centerFreq: number; bandwidth: number; waterfallMin: number; waterfallMax: number; fftSize: number }) => {
+        const cfKHz = cf / 1000;
+        const bwKHz = bandwidth / 1000;
+        owrxSdrCenter.current = cfKHz;
+        owrxSdrBw.current     = bwKHz;
+        setWfCenter(cfKHz);
+        setWfBandwidth(bwKHz);
+        setWfCanvasWidth(fftSize);
         setWfMinDb(waterfallMin !== -150 ? waterfallMin : -120);
         setWfMaxDb(waterfallMax !== 0    ? waterfallMax : -20);
+        // Reset zoom view to full SDR band on (re)connect
+        setCenterFreq(cfKHz);
+        centerFreqRef.current = cfKHz;
       });
+
       stream.on('waterfall', ({ bins }: OpenWebRXWaterfallData) => {
-        // Pass Float32Array directly — Waterfall.addRow handles raw dB values
-        wfRef.current?.addRow({ bins, sequence: 0, xBin: 0, zoom: 0, flags: 0 });
+        const z = zoomRef.current;
+        let displayBins: Float32Array = bins;
+        if (z > 0) {
+          // Client-side zoom: slice the center portion of the bins
+          const sdrBw  = owrxSdrBw.current;
+          const sdrCtr = owrxSdrCenter.current;
+          const viewCtr = centerFreqRef.current;
+          const visibleBw = sdrBw / Math.pow(2, z);
+          const sdrStart  = sdrCtr - sdrBw / 2;
+          const binStart  = Math.max(0,            Math.round((viewCtr - visibleBw / 2 - sdrStart) / sdrBw * bins.length));
+          const binEnd    = Math.min(bins.length,  Math.round((viewCtr + visibleBw / 2 - sdrStart) / sdrBw * bins.length));
+          displayBins = bins.slice(binStart, binEnd);
+        }
+        wfRef.current?.addRow({ bins: displayBins, sequence: 0, xBin: 0, zoom: 0, flags: 0 });
       });
     }
   }, [connected, disconnect, sdrType, frequency, mode, lowCut, highCut, agc, zoom, centerFreq, audio]);
@@ -129,7 +159,7 @@ export default function App() {
     if (isNaN(f) || f <= 0 || f > 30000) return;
     setFrequency(f);
     setFreqInput(f.toFixed(1));
-    if (zoom > 0) setCenterFreq(f);   // only re-center when zoomed in
+    if (zoom > 0) setCenterFreq(f);
     audioStreamRef.current?.tune(f, mode);
     owrxStreamRef.current?.tune(f, mode, lowCut, highCut);
     if (zoom > 0) wfStreamRef.current?.setView(zoom, f);
@@ -139,9 +169,11 @@ export default function App() {
     const f = Math.round(freq * 10) / 10;
     setFrequency(f);
     setFreqInput(f.toFixed(1));
+    if (zoom > 0) setCenterFreq(f);
     audioStreamRef.current?.tune(f, mode);
     owrxStreamRef.current?.tune(f, mode, lowCut, highCut);
-  }, [mode, lowCut, highCut]);
+    if (zoom > 0) wfStreamRef.current?.setView(zoom, f);
+  }, [mode, lowCut, highCut, zoom]);
 
   const handleModeChange = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
     const m = e.target.value as AudioMode;
@@ -156,18 +188,33 @@ export default function App() {
   const handleZoomChange = useCallback((delta: number) => {
     const z = Math.max(0, Math.min(14, zoom + delta));
     setZoom(z);
-    if (z > 0) {
-      const bw = 30000 / Math.pow(2, z);
-      const cf = Math.max(bw / 2, Math.min(30000 - bw / 2, frequency));
-      setCenterFreq(cf);
-      setWfCenter(cf);
-      wfStreamRef.current?.setView(z, cf);
+
+    if (sdrType === 'kiwi') {
+      if (z > 0) {
+        const bw = 30000 / Math.pow(2, z);
+        const cf = Math.max(bw / 2, Math.min(30000 - bw / 2, frequency));
+        setCenterFreq(cf);
+        setWfCenter(cf);
+        wfStreamRef.current?.setView(z, cf);
+      } else {
+        setCenterFreq(15000);
+        setWfCenter(15000);
+        wfStreamRef.current?.setView(z, 15000);
+      }
     } else {
-      setCenterFreq(15000);
-      setWfCenter(15000);
-      wfStreamRef.current?.setView(z, 15000);
+      // OpenWebRX: client-side zoom, center on tuned frequency
+      const sdrBw  = owrxSdrBw.current;
+      const sdrCtr = owrxSdrCenter.current;
+      if (z > 0) {
+        const visibleBw = sdrBw / Math.pow(2, z);
+        const half = visibleBw / 2;
+        const cf = Math.max(sdrCtr - sdrBw / 2 + half, Math.min(sdrCtr + sdrBw / 2 - half, frequency));
+        setCenterFreq(cf);
+      } else {
+        setCenterFreq(sdrCtr);
+      }
     }
-  }, [zoom, frequency]);
+  }, [zoom, sdrType, frequency]);
 
   const handleAgcToggle = useCallback(() => {
     const next = !agc;
@@ -176,8 +223,10 @@ export default function App() {
   }, [agc]);
 
   // Waterfall view parameters
-  const wfCenterProp = sdrType === 'openwebrx' ? wfCenter : (zoom === 0 ? 15000 : centerFreq);
-  const wfBwProp     = sdrType === 'openwebrx' ? wfBandwidth : 30000;
+  const wfCenterProp = sdrType === 'openwebrx'
+    ? (zoom === 0 ? wfCenter : centerFreq)
+    : (zoom === 0 ? 15000 : centerFreq);
+  const wfBwProp = sdrType === 'openwebrx' ? wfBandwidth : 30000;
 
   return (
     <>
@@ -246,17 +295,14 @@ export default function App() {
           />
         </div>
 
-        {sdrType === 'kiwi' && (
-          <>
-            <span className="sep">|</span>
-            <div className="ctrl-group">
-              <span className="ctrl-label">Zoom</span>
-              <button className="btn" onClick={() => handleZoomChange(-1)}>−</button>
-              <span style={{ color: '#c8d8e8', minWidth: '16px', textAlign: 'center' }}>{zoom}</span>
-              <button className="btn" onClick={() => handleZoomChange(1)}>+</button>
-            </div>
-          </>
-        )}
+        <span className="sep">|</span>
+
+        <div className="ctrl-group">
+          <span className="ctrl-label">Zoom</span>
+          <button className="btn" onClick={() => handleZoomChange(-1)}>−</button>
+          <span style={{ color: '#c8d8e8', minWidth: '16px', textAlign: 'center' }}>{zoom}</span>
+          <button className="btn" onClick={() => handleZoomChange(1)}>+</button>
+        </div>
 
         <span className="sep">|</span>
 
@@ -301,12 +347,13 @@ export default function App() {
         ref={wfRef}
         centerFreq={wfCenterProp}
         totalBw={wfBwProp}
-        zoom={sdrType === 'kiwi' ? zoom : 0}
+        zoom={zoom}
         tuneFreq={frequency}
         lowCut={lowCut}
         highCut={highCut}
         minDb={wfMinDb}
         maxDb={wfMaxDb}
+        canvasWidth={wfCanvasWidth}
         onTune={handleTune}
       />
 
