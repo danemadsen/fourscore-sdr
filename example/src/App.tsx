@@ -18,7 +18,7 @@ export default function App() {
   const [freqInput, setFreqInput] = useState('7200');
   const [mode, setMode] = useState<AudioMode>('lsb');
   const [zoom, setZoom] = useState(0);
-  const [centerFreq, setCenterFreq] = useState(7200);
+  const [centerFreq, setCenterFreq] = useState(15000);
   const [agc, setAgc] = useState(true);
   const [volume, setVolume] = useState(0.8);
   const [rssi, setRssi] = useState(-127);
@@ -149,7 +149,6 @@ export default function App() {
   const handleTune = useCallback((freq: number) => {
     const f = Math.round(freq * 10) / 10;
     setFrequency(f);
-    setCenterFreq(f);
     setFreqInput(f.toFixed(1));
     audioStreamRef.current?.tune(f, mode);
   }, [mode]);
@@ -261,6 +260,7 @@ export default function App() {
         ref={wfRef}
         centerFreq={centerFreq}
         zoom={zoom}
+        tuneFreq={frequency}
         minDb={-120}
         maxDb={-20}
         onTune={handleTune}

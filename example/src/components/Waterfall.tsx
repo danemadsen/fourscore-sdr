@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback, forwardRef, useImperativeHandle } from 'react';
+import { useRef, useEffect, useCallback, forwardRef, useImperativeHandle, useState } from 'react';
 import type { WaterfallData } from '@fourscore/sdr';
 
 // Precomputed color LUT: bin value 0-255 -> [r, g, b]
@@ -33,9 +33,12 @@ const COLOR_LUT = new Uint8Array(256 * 3);
   }
 })();
 
+const TOTAL_BW = 30000; // kHz
+
 interface WaterfallProps {
   centerFreq: number;
   zoom: number;
+  tuneFreq: number;
   minDb: number;
   maxDb: number;
   onTune: (freq: number) => void;
@@ -49,9 +52,11 @@ const CANVAS_W = 1024;
 const CANVAS_H = 300;
 
 export const Waterfall = forwardRef<WaterfallHandle, WaterfallProps>(
-  ({ centerFreq, zoom, minDb, maxDb, onTune }, ref) => {
+  ({ centerFreq, zoom, tuneFreq, minDb, maxDb, onTune }, ref) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const rowBufRef = useRef<ImageData | null>(null);
+    const [hoverFreq, setHoverFreq] = useState<number | null>(null);
+    const [hoverX, setHoverX] = useState(0);
 
     useEffect(() => {
       const canvas = canvasRef.current;
@@ -63,17 +68,21 @@ export const Waterfall = forwardRef<WaterfallHandle, WaterfallProps>(
       rowBufRef.current = ctx.createImageData(CANVAS_W, 1);
     }, []);
 
+    // At zoom=0 the full bandwidth is always shown regardless of centerFreq
+    const bw = TOTAL_BW / Math.pow(2, zoom);
+    const effectiveCenter = zoom === 0 ? TOTAL_BW / 2 : centerFreq;
+    const fStart = effectiveCenter - bw / 2;
+    const fEnd = effectiveCenter + bw / 2;
+
     const addRow = useCallback((data: WaterfallData) => {
       const canvas = canvasRef.current;
       if (!canvas) return;
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
 
-      // Scroll existing content down by 1 pixel
       const existing = ctx.getImageData(0, 0, CANVAS_W, CANVAS_H - 1);
       ctx.putImageData(existing, 0, 1);
 
-      // Write new row at top
       const row = rowBufRef.current ?? ctx.createImageData(CANVAS_W, 1);
       const pixels = row.data;
       const bins = data.bins;
@@ -93,36 +102,85 @@ export const Waterfall = forwardRef<WaterfallHandle, WaterfallProps>(
 
     useImperativeHandle(ref, () => ({ addRow }), [addRow]);
 
+    const freqToPercent = (f: number) => (f - fStart) / bw * 100;
+    const tuneX = freqToPercent(tuneFreq);
+
     const handleClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
       const canvas = canvasRef.current;
       if (!canvas) return;
       const rect = canvas.getBoundingClientRect();
       const x = (e.clientX - rect.left) / rect.width;
-      const bw = 30000 / Math.pow(2, zoom);
-      const freq = centerFreq - bw / 2 + x * bw;
-      onTune(Math.max(0, Math.min(30000, freq)));
+      const effectiveCtr = zoom === 0 ? TOTAL_BW / 2 : centerFreq;
+      const bwLocal = TOTAL_BW / Math.pow(2, zoom);
+      const freq = effectiveCtr - bwLocal / 2 + x * bwLocal;
+      onTune(Math.max(0, Math.min(TOTAL_BW, freq)));
     }, [centerFreq, zoom, onTune]);
 
+    const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const rect = canvas.getBoundingClientRect();
+      const x = (e.clientX - rect.left) / rect.width;
+      const effectiveCtr = zoom === 0 ? TOTAL_BW / 2 : centerFreq;
+      const bwLocal = TOTAL_BW / Math.pow(2, zoom);
+      const freq = effectiveCtr - bwLocal / 2 + x * bwLocal;
+      setHoverFreq(Math.max(0, Math.min(TOTAL_BW, freq)));
+      setHoverX(e.clientX - rect.left);
+    }, [centerFreq, zoom]);
+
+    const handleMouseLeave = useCallback(() => setHoverFreq(null), []);
+
     // Frequency axis ticks
-    const bw = 30000 / Math.pow(2, zoom);
-    const fStart = centerFreq - bw / 2;
-    const fEnd = centerFreq + bw / 2;
     const tickStep = bw > 5000 ? 1000 : bw > 500 ? 100 : 10;
     const ticks: { pct: number; label: string }[] = [];
     const firstTick = Math.ceil(fStart / tickStep) * tickStep;
     for (let f = firstTick; f <= fEnd; f += tickStep) {
-      ticks.push({ pct: (f - fStart) / bw * 100, label: (f / 1000).toFixed(f % 1000 === 0 ? 0 : 2) });
+      ticks.push({ pct: freqToPercent(f), label: (f / 1000).toFixed(f % 1000 === 0 ? 0 : 2) });
     }
 
     return (
       <div className="waterfall-wrapper">
-        <canvas
-          ref={canvasRef}
-          width={CANVAS_W}
-          height={CANVAS_H}
-          className="waterfall-canvas"
-          onClick={handleClick}
-        />
+        <div style={{ position: 'relative' }}>
+          <canvas
+            ref={canvasRef}
+            width={CANVAS_W}
+            height={CANVAS_H}
+            className="waterfall-canvas"
+            onClick={handleClick}
+            onMouseMove={handleMouseMove}
+            onMouseLeave={handleMouseLeave}
+          />
+          {/* Tuning cursor */}
+          {tuneX >= 0 && tuneX <= 100 && (
+            <div style={{
+              position: 'absolute', top: 0, bottom: 0,
+              left: `${tuneX}%`, width: '1px',
+              background: 'rgba(255,255,255,0.8)',
+              pointerEvents: 'none',
+            }}>
+              <span style={{
+                position: 'absolute', top: 4, left: 3,
+                color: '#fff', fontSize: '11px', fontFamily: 'monospace',
+                background: 'rgba(0,0,0,0.6)', padding: '1px 3px',
+                whiteSpace: 'nowrap',
+              }}>
+                {(tuneFreq / 1000).toFixed(3)} MHz
+              </span>
+            </div>
+          )}
+          {/* Hover tooltip */}
+          {hoverFreq !== null && (
+            <div style={{
+              position: 'absolute', bottom: 24, pointerEvents: 'none',
+              left: Math.min(hoverX, CANVAS_W - 90),
+              color: '#fff', fontSize: '11px', fontFamily: 'monospace',
+              background: 'rgba(0,0,0,0.7)', padding: '2px 5px',
+              whiteSpace: 'nowrap',
+            }}>
+              {(hoverFreq / 1000).toFixed(3)} MHz
+            </div>
+          )}
+        </div>
         <div className="freq-axis">
           {ticks.map(t => (
             <span key={t.pct} className="freq-tick" style={{ left: `${t.pct}%` }}>
