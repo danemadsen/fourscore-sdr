@@ -159,7 +159,33 @@ export class OpenWebRXStream extends EventEmitter implements OpenWebRXStreamEven
         // The server sends 2-3 rapid config messages during startup; the first
         // ones have samp_rate=0 and would restart the DSP pipeline with wrong params.
         if (this.bandwidth > 0) {
-          this._sendDspControl();
+          // On first valid config, adopt start_offset_freq / start_mod if provided.
+          // This puts us at a frequency the server knows is within its tunable range,
+          // avoiding an out-of-band offset if the user's initial frequency doesn't match.
+          if (!this.openEmitted) {
+            const startOffsetHz = value['start_offset_freq'] as number | undefined;
+            const startMod      = value['start_mod']         as string | undefined;
+            if (startOffsetHz !== undefined) {
+              this.opts.frequency = (this.centerFreq + startOffsetHz) / 1000;
+            }
+            if (startMod !== undefined) {
+              // Reverse-map OpenWebRX mod name back to our AudioMode
+              const rev = Object.entries(OWRX_MODE_MAP).find(([, v]) => v === startMod);
+              const newMode = rev ? rev[0] as import('../types').AudioMode : startMod as import('../types').AudioMode;
+              this.opts.mode = newMode;
+              // Also update filter cuts to match the new mode — without this we'd
+              // send NFM mode with LSB filter cuts, producing garbled/no audio.
+              const cuts = MODE_CUTS[newMode];
+              if (cuts) {
+                this.opts.lowCut  = cuts.lowCut;
+                this.opts.highCut = cuts.highCut;
+              }
+            }
+          }
+          // Always force action:start on config — mirrors the reference client which
+          // stops and restarts the demodulator on every config (including the one
+          // the server sends after a setfrequency command recenters the SDR hardware).
+          this._sendDspControl(true);
           if (!this.openEmitted) {
             this.openEmitted = true;
             this.emit('open');
@@ -180,15 +206,18 @@ export class OpenWebRXStream extends EventEmitter implements OpenWebRXStreamEven
     }
   }
 
+  private _audioFrameCount = 0;
+
   private _handleBinary(buf: ArrayBuffer): void {
     const type = new Uint8Array(buf, 0, 1)[0];
     const data = buf.slice(1);
     if (type === 1) this._handleWaterfall(data);
-    else if (type === 2) this._handleAudio(data);
-    else if (type === 4) this._handleAudio(data);  // HD audio (WFM)
+    else if (type === 2) this._handleAudio(data, type);
+    else if (type === 4) this._handleAudio(data, type);  // HD audio (WFM)
+    else console.log('[fourscore-sdr] unknown binary type:', type, 'len:', data.byteLength);
   }
 
-  private _handleAudio(data: ArrayBuffer): void {
+  private _handleAudio(data: ArrayBuffer, type: number): void {
     let samples: Int16Array;
     if (this.audioCompression === 'adpcm') {
       // Do NOT reset — decodeWithSync maintains state across frames
@@ -196,6 +225,19 @@ export class OpenWebRXStream extends EventEmitter implements OpenWebRXStreamEven
     } else {
       // Raw little-endian 16-bit PCM — truncate to even byte count
       samples = new Int16Array(data, 0, Math.floor(data.byteLength / 2));
+    }
+    // Log first few frames so we can verify audio is actually arriving and changing
+    this._audioFrameCount++;
+    if (this._audioFrameCount <= 3 || this._audioFrameCount % 200 === 0) {
+      const s = samples;
+      let min = 0, max = 0, rms = 0;
+      for (let i = 0; i < Math.min(s.length, 512); i++) {
+        if (s[i] < min) min = s[i];
+        if (s[i] > max) max = s[i];
+        rms += s[i] * s[i];
+      }
+      rms = Math.sqrt(rms / Math.min(s.length, 512));
+      console.log(`[fourscore-sdr] audio frame #${this._audioFrameCount} type=${type} compression=${this.audioCompression} bytes=${data.byteLength} samples=${s.length} min=${min} max=${max} rms=${rms.toFixed(0)}`);
     }
     // Measure the actual server output rate from incoming sample counts.
     // 2000000 Hz SDR can't produce exactly 12000 Hz (not an integer divisor),
@@ -238,23 +280,26 @@ export class OpenWebRXStream extends EventEmitter implements OpenWebRXStreamEven
     this.emit('waterfall', { bins, centerFreq: this.centerFreq, bandwidth: this.bandwidth });
   }
 
-  private _sendDspControl(): void {
+  private _sendDspControl(forceStart = false): void {
     const offsetHz = this.centerFreq > 0
       ? Math.round(this.opts.frequency * 1000) - this.centerFreq
       : 0;
     const mod = OWRX_MODE_MAP[this.opts.mode] ?? this.opts.mode;
-    this._sendJson({
-      type: 'dspcontrol',
-      params: {
-        low_cut:       this.opts.lowCut,
-        high_cut:      this.opts.highCut,
-        offset_freq:   offsetHz,
-        mod,
-        squelch_level: this.opts.squelch,
-      },
-    });
-    if (!this.dspStarted) {
+    const params = {
+      low_cut:          this.opts.lowCut,
+      high_cut:         this.opts.highCut,
+      offset_freq:      offsetHz,
+      mod,
+      squelch_level:    this.opts.squelch,
+      secondary_mod:    false,
+      dmr_filter:       3,
+      audio_service_id: 0,
+    };
+    console.log('[fourscore-sdr] → dspcontrol', JSON.stringify({ type: 'dspcontrol', params }));
+    this._sendJson({ type: 'dspcontrol', params });
+    if (!this.dspStarted || forceStart) {
       this.dspStarted = true;
+      console.log('[fourscore-sdr] dspcontrol action:start');
       this._sendJson({ type: 'dspcontrol', action: 'start' });
     }
   }
@@ -267,12 +312,32 @@ export class OpenWebRXStream extends EventEmitter implements OpenWebRXStreamEven
 
   /** Retune without reopening the connection. frequency in kHz. */
   tune(frequency: number, mode: AudioMode, lowCut?: number, highCut?: number): void {
+    const modeChanged = mode !== this.opts.mode;
     this.opts.frequency = frequency;
     this.opts.mode = mode;
     const cuts = MODE_CUTS[mode];
     this.opts.lowCut  = lowCut  ?? cuts.lowCut;
     this.opts.highCut = highCut ?? cuts.highCut;
-    this._sendDspControl();
+
+    const freqHz  = Math.round(frequency * 1000);
+    const offsetHz = this.centerFreq > 0 ? freqHz - this.centerFreq : 0;
+    const withinBand = this.bandwidth > 0 && Math.abs(offsetHz) <= this.bandwidth / 2;
+
+    if (!withinBand && this.centerFreq > 0) {
+      // Cross-band: ask server to retune SDR hardware center.
+      // Server will reply with a new config → config handler sends corrected dspcontrol.
+      this._sendJson({ type: 'setfrequency', params: { frequency: freqHz } });
+    }
+
+    // Always send action:start — the server at some installations ignores params-only
+    // dspcontrol updates and requires a restart to apply the new offset/mode.
+    this._sendDspControl(true);
+
+    if (modeChanged) {
+      this.audioRateStart    = 0;
+      this.audioRateSamples  = 0;
+      this.audioRateReported = false;
+    }
   }
 
   close(): void {
