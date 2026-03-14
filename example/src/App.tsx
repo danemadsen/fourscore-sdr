@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { KiwiSDR, OpenWebRX, MODE_CUTS, AUDIO_MODES } from '@fourscore/sdr';
-import type { AudioStream, WaterfallStream, OpenWebRXStream, AudioMode, AudioData, OpenWebRXWaterfallData } from '@fourscore/sdr';
+import type { AudioStream, WaterfallStream, OpenWebRXStream, OpenWebRXProfile, AudioMode, AudioData, OpenWebRXWaterfallData } from '@fourscore/sdr';
 import { Waterfall, type WaterfallHandle } from './components/Waterfall';
 import { SMeter } from './components/SMeter';
 import { useAudio } from './hooks/useAudio';
@@ -38,6 +38,8 @@ export default function App() {
   const [wfCanvasWidth, setWfCanvasWidth] = useState(1024);
   const [error, setError]             = useState<string | null>(null);
   const [status, setStatus]           = useState('DISCONNECTED');
+  const [owrxProfiles, setOwrxProfiles]         = useState<OpenWebRXProfile[]>([]);
+  const [owrxActiveProfile, setOwrxActiveProfile] = useState('');
 
   // KiwiSDR — separate audio + waterfall streams
   const audioStreamRef = useRef<AudioStream | null>(null);
@@ -111,6 +113,7 @@ export default function App() {
       const stream = client.connect({ frequency, mode, lowCut, highCut });
       owrxStreamRef.current = stream;
       stream.on('open',      () => { setConnected(true); setStatus('CONNECTED'); });
+      stream.on('profiles',  (profiles, activeId) => { setOwrxProfiles(profiles); setOwrxActiveProfile(activeId); });
       stream.on('audio',     ({ samples }: AudioData) => audio.play(samples));
       stream.on('audiorate', (rate: number) => audio.setServerRate(rate));
       stream.on('smeter',    (r: number) => setRssi(r));
@@ -286,6 +289,28 @@ export default function App() {
             ))}
           </select>
         </div>
+
+        {sdrType === 'openwebrx' && owrxProfiles.length > 0 && (
+          <>
+            <span className="sep">|</span>
+            <div className="ctrl-group">
+              <span className="ctrl-label">Profile</span>
+              <select
+                className="mode-select"
+                value={owrxActiveProfile}
+                onChange={e => {
+                  const id = e.target.value;
+                  setOwrxActiveProfile(id);
+                  owrxStreamRef.current?.selectProfile(id);
+                }}
+              >
+                {owrxProfiles.map(p => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+            </div>
+          </>
+        )}
 
         <span className="sep">|</span>
 

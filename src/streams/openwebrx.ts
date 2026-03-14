@@ -34,11 +34,17 @@ export interface OpenWebRXConfig {
   fftSize: number;       // bins per waterfall frame
 }
 
+export interface OpenWebRXProfile {
+  id:   string;  // "sdr_id|profile_id"
+  name: string;
+}
+
 export interface OpenWebRXStreamEvents {
   on(event: 'open',      listener: () => void): this;
   on(event: 'close',     listener: (code: number, reason: string) => void): this;
   on(event: 'error',     listener: (err: Error) => void): this;
   on(event: 'config',    listener: (cfg: OpenWebRXConfig) => void): this;
+  on(event: 'profiles',  listener: (profiles: OpenWebRXProfile[], activeId: string) => void): this;
   on(event: 'msg',       listener: (msg: Record<string, unknown>) => void): this;
   on(event: 'audio',     listener: (data: AudioData) => void): this;
   on(event: 'waterfall', listener: (data: OpenWebRXWaterfallData) => void): this;
@@ -70,6 +76,7 @@ export class OpenWebRXStream extends EventEmitter implements OpenWebRXStreamEven
   private sequence = 0;
   private dspStarted = false;
   private openEmitted = false;
+  private activeProfileId = '';
   // Audio rate measurement — detect actual server output rate from frame data
   private audioRateStart = 0;
   private audioRateSamples = 0;
@@ -145,6 +152,10 @@ export class OpenWebRXStream extends EventEmitter implements OpenWebRXStreamEven
         this.waterfallMin = wfLevels?.min ?? -150;
         this.waterfallMax = wfLevels?.max ?? 0;
         const fftSize = (value['fft_size'] as number) ?? 1024;
+        // Track active profile from config so we can report it with the profiles list
+        if (value['sdr_id'] && value['profile_id']) {
+          this.activeProfileId = `${value['sdr_id']}|${value['profile_id']}`;
+        }
         console.log('[fourscore-sdr] openwebrx config:', { center_freq: this.centerFreq, samp_rate: this.bandwidth, fft_size: fftSize, audio_compression: this.audioCompression, fft_compression: this.fftCompression, waterfall_levels: { min: this.waterfallMin, max: this.waterfallMax } });
         this.emit('config', {
           centerFreq:       this.centerFreq,
@@ -198,6 +209,13 @@ export class OpenWebRXStream extends EventEmitter implements OpenWebRXStreamEven
         // Server sends raw linear power; convert to dB as the reference client does
         const raw = (msg['value'] as number) ?? 0;
         this.emit('smeter', raw > 0 ? 10 * Math.log10(raw) : -127);
+        break;
+      }
+
+      case 'profiles': {
+        const profiles = (msg['value'] as Array<{ id: string; name: string }>)
+          .map(p => ({ id: p.id, name: p.name }));
+        this.emit('profiles', profiles, this.activeProfileId);
         break;
       }
 
@@ -338,6 +356,28 @@ export class OpenWebRXStream extends EventEmitter implements OpenWebRXStreamEven
       this.audioRateSamples  = 0;
       this.audioRateReported = false;
     }
+  }
+
+  /**
+   * Switch to a different SDR profile (e.g. "rtlsdr|160m").
+   * The server will retune the hardware and send a new config message.
+   * Mirrors the reference client: selectprofile → connectionproperties → dspcontrol → start.
+   */
+  selectProfile(profileId: string): void {
+    this.activeProfileId = profileId;
+    this._sendJson({ type: 'selectprofile', params: { profile: profileId } });
+    // The server expects connectionproperties to be re-sent after a profile change
+    this._sendJson({
+      type: 'connectionproperties',
+      params: { output_rate: this.opts.outputRate, hd_output_rate: this.opts.outputRate },
+    });
+    // Reset audio rate measurement — new profile may have different hardware/rate
+    this.audioRateStart    = 0;
+    this.audioRateSamples  = 0;
+    this.audioRateReported = false;
+    // The server will respond with a new config, which triggers _sendDspControl(true)
+    // automatically. No need to send dspcontrol here — the new center_freq isn't
+    // known yet and would produce a wrong offset.
   }
 
   close(): void {
