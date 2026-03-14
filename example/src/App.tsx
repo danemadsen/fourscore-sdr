@@ -82,7 +82,7 @@ export default function App() {
 
     if (sdrType === 'kiwi') {
       // ── KiwiSDR ────────────────────────────────────────────────────────────
-      setWfMinDb(-75);
+      setWfMinDb(-110);
       setWfMaxDb(-20);
       setWfCanvasWidth(1024);
       const client = new KiwiSDR({ host: kiwiAddr.host, port: kiwiAddr.port });
@@ -182,11 +182,24 @@ export default function App() {
     const f = Math.round(freq * 10) / 10;
     setFrequency(f);
     setFreqInput(f.toFixed(1));
-    if (zoom > 0) setCenterFreq(f);
     audioStreamRef.current?.tune(f, mode);
     owrxStreamRef.current?.tune(f, mode, lowCut, highCut);
-    if (zoom > 0) wfStreamRef.current?.setView(zoom, f);
-  }, [mode, lowCut, highCut, zoom]);
+    if (zoom > 0) {
+      if (sdrType === 'kiwi') {
+        const bw = 30000 / Math.pow(2, zoom);
+        const half = bw / 2;
+        const cf = Math.max(half, Math.min(30000 - half, f));
+        setCenterFreq(cf);
+        wfStreamRef.current?.setView(zoom, cf);
+      } else {
+        const sdrBw = owrxSdrBw.current;
+        const sdrCtr = owrxSdrCenter.current;
+        const visibleBw = sdrBw / Math.pow(2, zoom);
+        const half = visibleBw / 2;
+        setCenterFreq(Math.max(sdrCtr - sdrBw / 2 + half, Math.min(sdrCtr + sdrBw / 2 - half, f)));
+      }
+    }
+  }, [mode, lowCut, highCut, zoom, sdrType]);
 
   const handleModeChange = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
     const m = e.target.value as AudioMode;
