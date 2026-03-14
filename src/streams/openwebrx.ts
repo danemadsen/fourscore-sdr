@@ -43,6 +43,7 @@ export interface OpenWebRXStreamEvents {
   on(event: 'audio',     listener: (data: AudioData) => void): this;
   on(event: 'waterfall', listener: (data: OpenWebRXWaterfallData) => void): this;
   on(event: 'smeter',    listener: (rssi: number) => void): this;
+  on(event: 'audiorate', listener: (rate: number) => void): this;
 }
 
 interface ResolvedOptions {
@@ -69,6 +70,10 @@ export class OpenWebRXStream extends EventEmitter implements OpenWebRXStreamEven
   private sequence = 0;
   private dspStarted = false;
   private openEmitted = false;
+  // Audio rate measurement — detect actual server output rate from frame data
+  private audioRateStart = 0;
+  private audioRateSamples = 0;
+  private audioRateReported = false;
   private readonly opts: ResolvedOptions;
 
   constructor(host: string, port: number, opts: OpenWebRXStreamOptions) {
@@ -192,6 +197,25 @@ export class OpenWebRXStream extends EventEmitter implements OpenWebRXStreamEven
       // Raw little-endian 16-bit PCM — truncate to even byte count
       samples = new Int16Array(data, 0, Math.floor(data.byteLength / 2));
     }
+    // Measure the actual server output rate from incoming sample counts.
+    // 2000000 Hz SDR can't produce exactly 12000 Hz (not an integer divisor),
+    // so the server rounds to the nearest achievable rate (e.g. 10000 or 8000 Hz).
+    // We measure for 2 seconds then emit 'audiorate' so the player can resample.
+    if (!this.audioRateReported && samples.length > 0) {
+      const now = performance.now();
+      if (!this.audioRateStart) {
+        this.audioRateStart = now;
+      } else {
+        this.audioRateSamples += samples.length;
+        const elapsed = (now - this.audioRateStart) / 1000;
+        if (elapsed >= 2.0) {
+          const measuredRate = Math.round(this.audioRateSamples / elapsed);
+          this.audioRateReported = true;
+          this.emit('audiorate', measuredRate);
+        }
+      }
+    }
+
     const audioData: AudioData = { samples, rssi: -127, sequence: this.sequence++, flags: 0 };
     this.emit('audio', audioData);
   }

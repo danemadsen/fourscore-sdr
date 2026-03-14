@@ -10,6 +10,9 @@ export function useAudio() {
   const scriptRef     = useRef<ScriptProcessorNode | null>(null);
   const queueRef      = useRef<Float32Array[]>([]);
   const queueSizeRef  = useRef(0);
+  // Server may output at a different rate than SAMPLE_RATE (e.g. 8000 or 10000 Hz
+  // when the SDR sample rate isn't divisible by 12000). We resample on the fly.
+  const serverRateRef = useRef(SAMPLE_RATE);
 
   const init = useCallback(() => {
     if (ctxRef.current) return;
@@ -55,8 +58,25 @@ export function useAudio() {
   const play = useCallback((samples: Int16Array) => {
     if (!ctxRef.current) return;
 
-    const floats = new Float32Array(samples.length);
-    for (let i = 0; i < samples.length; i++) floats[i] = samples[i] / 32768;
+    const serverRate = serverRateRef.current;
+    let floats: Float32Array;
+
+    if (serverRate === SAMPLE_RATE) {
+      // No resampling needed — KiwiSDR and servers that honour output_rate: 12000
+      floats = new Float32Array(samples.length);
+      for (let i = 0; i < samples.length; i++) floats[i] = samples[i] / 32768;
+    } else {
+      // Linear interpolation resample from serverRate → SAMPLE_RATE
+      const ratio  = SAMPLE_RATE / serverRate;
+      const outLen = Math.round(samples.length * ratio);
+      floats = new Float32Array(outLen);
+      for (let i = 0; i < outLen; i++) {
+        const src = i / ratio;
+        const lo  = Math.floor(src);
+        const hi  = Math.min(lo + 1, samples.length - 1);
+        floats[i] = ((1 - (src - lo)) * samples[lo] + (src - lo) * samples[hi]) / 32768;
+      }
+    }
 
     queueRef.current.push(floats);
     queueSizeRef.current += floats.length;
@@ -68,6 +88,13 @@ export function useAudio() {
     }
   }, []);
 
+  const setServerRate = useCallback((rate: number) => {
+    serverRateRef.current = rate;
+    // Flush stale samples queued at the old rate to avoid a pitch blip on switch
+    queueRef.current = [];
+    queueSizeRef.current = 0;
+  }, []);
+
   const setVolume = useCallback((v: number) => {
     if (gainRef.current) gainRef.current.gain.value = v;
   }, []);
@@ -75,12 +102,13 @@ export function useAudio() {
   const stop = useCallback(() => {
     scriptRef.current?.disconnect();
     ctxRef.current?.close();
-    ctxRef.current   = null;
-    gainRef.current  = null;
+    ctxRef.current    = null;
+    gainRef.current   = null;
     scriptRef.current = null;
-    queueRef.current = [];
+    queueRef.current  = [];
     queueSizeRef.current = 0;
+    serverRateRef.current = SAMPLE_RATE;
   }, []);
 
-  return { init, play, stop, setVolume };
+  return { init, play, stop, setVolume, setServerRate };
 }

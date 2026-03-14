@@ -110,9 +110,10 @@ export default function App() {
 
       const stream = client.connect({ frequency, mode, lowCut, highCut });
       owrxStreamRef.current = stream;
-      stream.on('open',   () => { setConnected(true); setStatus('CONNECTED'); });
-      stream.on('audio',  ({ samples }: AudioData) => audio.play(samples));
-      stream.on('smeter', (r: number) => setRssi(r));
+      stream.on('open',      () => { setConnected(true); setStatus('CONNECTED'); });
+      stream.on('audio',     ({ samples }: AudioData) => audio.play(samples));
+      stream.on('audiorate', (rate: number) => audio.setServerRate(rate));
+      stream.on('smeter',    (r: number) => setRssi(r));
       stream.on('error',  (err: Error) => { setError(err.message); setStatus('ERROR'); setConnected(false); });
       stream.on('close',  (code: number, reason: string) => {
         setConnected(false);
