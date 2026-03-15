@@ -1,5 +1,4 @@
-import { EventEmitter } from '../utils/events';
-import { ImaAdpcmDecoder } from '../utils/adpcm';
+import { ImaAdpcmDecoder } from '../kiwisdr/adpcm';
 import { AudioMode, AudioData, OpenWebRXStreamOptions, OpenWebRXWaterfallData } from '../types';
 import { MODE_CUTS } from '../modes';
 
@@ -71,7 +70,27 @@ interface ResolvedOptions {
   username: string;
 }
 
-export class OpenWebRXStream extends EventEmitter implements OpenWebRXStreamEvents {
+export class OpenWebRXStream implements OpenWebRXStreamEvents {
+  private _listeners: Map<string, ((...args: any[]) => void)[]> = new Map();
+
+  on(event: string, listener: (...args: any[]) => void): this {
+    const list = this._listeners.get(event) ?? [];
+    list.push(listener);
+    this._listeners.set(event, list);
+    return this;
+  }
+
+  off(event: string, listener: (...args: any[]) => void): this {
+    const list = this._listeners.get(event) ?? [];
+    this._listeners.set(event, list.filter(l => l !== listener));
+    return this;
+  }
+
+  private emit(event: string, ...args: any[]): void {
+    const list = this._listeners.get(event) ?? [];
+    for (const listener of list) listener(...args);
+  }
+
   private ws: WebSocket | null = null;
   private closed = false;
   private readonly audioDecoder = new ImaAdpcmDecoder();
@@ -96,7 +115,6 @@ export class OpenWebRXStream extends EventEmitter implements OpenWebRXStreamEven
   private readonly opts: ResolvedOptions;
 
   constructor(host: string, port: number, opts: OpenWebRXStreamOptions) {
-    super();
     const cuts = MODE_CUTS[opts.mode];
     this.opts = {
       frequency:  opts.frequency,

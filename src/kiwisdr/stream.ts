@@ -1,6 +1,5 @@
-import { parseMsgBody } from '../utils/msg';
-import { EventEmitter } from '../utils/events';
-import { ImaAdpcmDecoder } from '../utils/adpcm';
+import { parseMsgBody } from './msg';
+import { ImaAdpcmDecoder } from './adpcm';
 import {
   AudioStreamOptions,
   AudioData,
@@ -18,7 +17,27 @@ const KEEPALIVE_INTERVAL_MS = 1000;
 const ascii = new TextDecoder('windows-1252');
 const utf8 = new TextDecoder('utf-8');
 
-export abstract class BaseStream extends EventEmitter {
+export abstract class BaseStream {
+  private _listeners: Map<string, ((...args: any[]) => void)[]> = new Map();
+
+  on(event: string, listener: (...args: any[]) => void): this {
+    const list = this._listeners.get(event) ?? [];
+    list.push(listener);
+    this._listeners.set(event, list);
+    return this;
+  }
+
+  off(event: string, listener: (...args: any[]) => void): this {
+    const list = this._listeners.get(event) ?? [];
+    this._listeners.set(event, list.filter(l => l !== listener));
+    return this;
+  }
+
+  protected emit(event: string, ...args: any[]): void {
+    const list = this._listeners.get(event) ?? [];
+    for (const listener of list) listener(...args);
+  }
+
   protected ws: WebSocket | null = null;
   private keepaliveTimer: number | null = null;
   private closed = false;
@@ -38,8 +57,6 @@ export abstract class BaseStream extends EventEmitter {
     /** Optional pre-fetched VER timestamp. Pass from KiwiSDR to share one fetch across streams. */
     tsPromise?: Promise<number>,
   ) {
-    super();
-
     const resolvedTsPromise = tsPromise ?? BaseStream._fetchTs(host, port);
 
     resolvedTsPromise.then(ts => {
