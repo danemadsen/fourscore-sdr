@@ -105,6 +105,53 @@ export interface WaterfallData {
   flags: number;
 }
 
+export interface OpenWebRXOptions {
+  /** Hostname, host:port, or full base URL */
+  host: string;
+  /** Port number, defaults to 8070 */
+  port?: number;
+  /** Use secure WebSocket/HTTPS transport */
+  secure?: boolean;
+  /** Optional base path when OpenWebRX is not mounted at the site root */
+  basePath?: string;
+}
+
+export interface OpenWebRXConfig {
+  /** Receiver center frequency in Hz */
+  centerFreq: number;
+  /** Receiver bandwidth / sample rate in Hz */
+  sampleRate: number;
+  /** FFT size advertised by the server */
+  fftSize: number;
+  /** Audio compression mode reported by the server */
+  audioCompression: string;
+  /** FFT compression mode reported by the server */
+  fftCompression: string;
+  /** Initial modulation selected by the server, if present */
+  startMod?: string;
+  /** Initial offset from center frequency in Hz, if present */
+  startOffsetFreq?: number;
+  /** Initial squelch threshold in dB, if present */
+  initialSquelchLevel?: number;
+  /** Raw config payload from the server */
+  raw: Record<string, unknown>;
+}
+
+export interface OpenWebRXReceiverDetails {
+  receiverName?: string;
+  receiverLocation?: string;
+  receiverAsl?: number;
+  locator?: string;
+  photoTitle?: string;
+  photoDesc?: string;
+  raw: Record<string, unknown>;
+}
+
+export interface OpenWebRXMessage {
+  type: string;
+  [key: string]: unknown;
+}
+
 // SND flags
 export const SND_FLAG_ADC_OVFL = 0x02;
 export const SND_FLAG_STEREO = 0x08;

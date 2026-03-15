@@ -1,16 +1,61 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { KiwiSDR, MODE_CUTS, AUDIO_MODES } from '@fourscore/sdr';
-import type { AudioStream, WaterfallStream, AudioMode } from '@fourscore/sdr';
+import { KiwiSDR, OpenWebRX, MODE_CUTS, AUDIO_MODES } from '@fourscore/sdr';
+import type {
+  AudioMode,
+  AudioStream,
+  OpenWebRXAudioStream,
+  OpenWebRXConfig,
+  OpenWebRXWaterfallStream,
+  WaterfallStream,
+} from '@fourscore/sdr';
 import { Waterfall, type WaterfallHandle } from './components/Waterfall';
 import { SMeter } from './components/SMeter';
 import { useAudio } from './hooks/useAudio';
 
-const SDR_URL = import.meta.env.VITE_KIWI_SDR_URL as string;
-const parsed = new URL(SDR_URL);
-const SDR_HOST = parsed.hostname;
-const SDR_PORT = parseInt(parsed.port) || 8073;
+type BackendKind = 'kiwi' | 'openwebrx';
+type AnyAudioStream = AudioStream | OpenWebRXAudioStream;
+type AnyWaterfallStream = WaterfallStream | OpenWebRXWaterfallStream;
+
+interface BackendConfig {
+  kind: BackendKind;
+  name: string;
+  url: URL;
+}
+
+const OPENWEBRX_AUDIO_MODES = AUDIO_MODES.filter((mode): mode is AudioMode => mode !== 'iq' && mode !== 'qam');
+
+function parseEnvUrl(value: string | undefined): URL | null {
+  if (!value) return null;
+
+  try {
+    return new URL(value);
+  } catch {
+    return null;
+  }
+}
+
+const BACKENDS: BackendConfig[] = [];
+
+const kiwiUrl = parseEnvUrl(import.meta.env.VITE_KIWI_SDR_URL as string | undefined);
+if (kiwiUrl) {
+  BACKENDS.push({ kind: 'kiwi', name: 'KiwiSDR', url: kiwiUrl });
+}
+
+const openWebRXUrl = parseEnvUrl(import.meta.env.VITE_OPENWEBRX_SDR_URL as string | undefined);
+if (openWebRXUrl) {
+  BACKENDS.push({ kind: 'openwebrx', name: 'OpenWebRX', url: openWebRXUrl });
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
+}
+
+function roundFrequency(freq: number): number {
+  return Math.round(freq * 10) / 10;
+}
 
 export default function App() {
+  const [backend, setBackend] = useState<BackendKind>(BACKENDS[0]?.kind ?? 'kiwi');
   const [connected, setConnected] = useState(false);
   const [frequency, setFrequency] = useState(7200);
   const [freqInput, setFreqInput] = useState('7200');
@@ -18,19 +63,40 @@ export default function App() {
   const [lowCut, setLowCut] = useState(MODE_CUTS.lsb.lowCut);
   const [highCut, setHighCut] = useState(MODE_CUTS.lsb.highCut);
   const [zoom, setZoom] = useState(0);
-  const [centerFreq, setCenterFreq] = useState(15000);
+  const [receiverBandwidth, setReceiverBandwidth] = useState(30000);
+  const [receiverCenterFreq, setReceiverCenterFreq] = useState(15000);
+  const [viewCenterFreq, setViewCenterFreq] = useState(15000);
   const [agc, setAgc] = useState(true);
   const [volume, setVolume] = useState(0.8);
   const [rssi, setRssi] = useState(-127);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState('DISCONNECTED');
 
-  const audioStreamRef = useRef<AudioStream | null>(null);
-  const wfStreamRef = useRef<WaterfallStream | null>(null);
-  const kiwiRef = useRef<KiwiSDR | null>(null);
+  const audioStreamRef = useRef<AnyAudioStream | null>(null);
+  const wfStreamRef = useRef<AnyWaterfallStream | null>(null);
   const wfRef = useRef<WaterfallHandle>(null);
 
   const audio = useAudio();
+
+  const activeBackend = BACKENDS.find(candidate => candidate.kind === backend) ?? BACKENDS[0] ?? null;
+  const availableModes = backend === 'openwebrx' ? OPENWEBRX_AUDIO_MODES : AUDIO_MODES;
+  const maxFrequency = receiverCenterFreq + receiverBandwidth / 2;
+  const minFrequency = receiverCenterFreq - receiverBandwidth / 2;
+  const agcSupported = backend === 'kiwi';
+  const meterUnit = backend === 'openwebrx' ? 'dB' : 'dBm';
+
+  const clampFrequencyToReceiver = useCallback((nextFrequency: number) => {
+    return roundFrequency(clamp(nextFrequency, minFrequency, maxFrequency));
+  }, [minFrequency, maxFrequency]);
+
+  const clampViewCenter = useCallback((nextCenterFreq: number, nextZoom: number) => {
+    if (nextZoom <= 0) return receiverCenterFreq;
+
+    const visibleBandwidth = receiverBandwidth / Math.pow(2, nextZoom);
+    const minCenter = receiverCenterFreq - receiverBandwidth / 2 + visibleBandwidth / 2;
+    const maxCenter = receiverCenterFreq + receiverBandwidth / 2 - visibleBandwidth / 2;
+    return clamp(nextCenterFreq, minCenter, maxCenter);
+  }, [receiverBandwidth, receiverCenterFreq]);
 
   const disconnect = useCallback(() => {
     audioStreamRef.current?.close();
@@ -43,9 +109,92 @@ export default function App() {
     setRssi(-127);
   }, [audio]);
 
+  useEffect(() => {
+    if (!availableModes.includes(mode)) {
+      const nextMode = availableModes[0] ?? 'am';
+      const cuts = MODE_CUTS[nextMode];
+      setMode(nextMode);
+      setLowCut(cuts.lowCut);
+      setHighCut(cuts.highCut);
+    }
+  }, [availableModes, mode]);
+
+  useEffect(() => {
+    if (backend !== 'kiwi') return;
+
+    setReceiverBandwidth(30000);
+    setReceiverCenterFreq(15000);
+    if (zoom === 0) {
+      setViewCenterFreq(15000);
+    }
+  }, [backend, zoom]);
+
+  useEffect(() => {
+    audio.setVolume(volume);
+  }, [volume, audio]);
+
+  const applyReceiverConfig = useCallback((config: OpenWebRXConfig) => {
+    if (config.sampleRate <= 0 || config.centerFreq <= 0) return;
+
+    const nextBandwidth = config.sampleRate / 1000;
+    const nextReceiverCenter = config.centerFreq / 1000;
+    const serverDefaultFrequency = config.startOffsetFreq !== undefined
+      ? (config.centerFreq + config.startOffsetFreq) / 1000
+      : nextReceiverCenter;
+    const nextClampViewCenter = (nextCenterFreq: number, nextZoom: number) => {
+      if (nextZoom <= 0) return nextReceiverCenter;
+
+      const visibleBandwidth = nextBandwidth / Math.pow(2, nextZoom);
+      const minCenter = nextReceiverCenter - nextBandwidth / 2 + visibleBandwidth / 2;
+      const maxCenter = nextReceiverCenter + nextBandwidth / 2 - visibleBandwidth / 2;
+      return clamp(nextCenterFreq, minCenter, maxCenter);
+    };
+
+    setReceiverBandwidth(nextBandwidth);
+    setReceiverCenterFreq(nextReceiverCenter);
+    const nextViewCenter = nextClampViewCenter(viewCenterFreq || nextReceiverCenter, zoom);
+    setViewCenterFreq(nextViewCenter);
+    wfStreamRef.current?.setView(zoom, nextViewCenter);
+
+    const isCurrentFrequencyVisible =
+      frequency >= nextReceiverCenter - nextBandwidth / 2 &&
+      frequency <= nextReceiverCenter + nextBandwidth / 2;
+
+    const nextFrequency = clamp(
+      isCurrentFrequencyVisible ? frequency : serverDefaultFrequency,
+      nextReceiverCenter - nextBandwidth / 2,
+      nextReceiverCenter + nextBandwidth / 2,
+    );
+
+    const roundedFrequency = roundFrequency(nextFrequency);
+    setFrequency(roundedFrequency);
+    setFreqInput(roundedFrequency.toFixed(1));
+    audioStreamRef.current?.tune(roundedFrequency, mode, lowCut, highCut);
+  }, [frequency, highCut, lowCut, mode, viewCenterFreq, zoom]);
+
+  const tuneReceiver = useCallback((rawFrequency: number, recenterView: boolean) => {
+    const nextFrequency = clampFrequencyToReceiver(rawFrequency);
+
+    setFrequency(nextFrequency);
+    setFreqInput(nextFrequency.toFixed(1));
+    audioStreamRef.current?.tune(nextFrequency, mode, lowCut, highCut);
+
+    if (recenterView) {
+      const nextViewCenter = clampViewCenter(nextFrequency, zoom);
+      setViewCenterFreq(nextViewCenter);
+      wfStreamRef.current?.setView(zoom, nextViewCenter);
+    }
+  }, [clampFrequencyToReceiver, clampViewCenter, highCut, lowCut, mode, zoom]);
+
   const connect = useCallback(() => {
     if (connected) {
       disconnect();
+      return;
+    }
+
+    if (!activeBackend) {
+      setError('No SDR backends are configured in example/.env');
+      setStatus('ERROR');
       return;
     }
 
@@ -53,150 +202,233 @@ export default function App() {
     setStatus('CONNECTING...');
     audio.init();
 
-    const kiwi = new KiwiSDR({ host: SDR_HOST, port: SDR_PORT });
-    kiwiRef.current = kiwi;
+    if (activeBackend.kind === 'kiwi') {
+      const kiwi = new KiwiSDR({
+        host: activeBackend.url.hostname,
+        port: parseInt(activeBackend.url.port || '8073', 10),
+      });
 
-    // Audio stream
-    const astream = kiwi.openAudioStream({
+      const astream = kiwi.openAudioStream({
+        frequency,
+        mode,
+        lowCut,
+        highCut,
+        agc,
+        sampleRate: 12000,
+      });
+      audioStreamRef.current = astream;
+
+      astream.on('open', () => {
+        setConnected(true);
+        setStatus('CONNECTED');
+      });
+
+      astream.on('audio', ({ samples, rssi: level }) => {
+        console.log('[kiwi audio]', samples.length, level);
+        audio.play(samples);
+        setRssi(level);
+      });
+
+      astream.on('smeter', (level) => {
+        console.log('[kiwi smeter]', level);
+      });
+
+      astream.on('msg', (message) => {
+        console.log('[kiwi audio msg]', message);
+      });
+
+      astream.on('error', (err) => {
+        setError(err.message);
+        setStatus('ERROR');
+        setConnected(false);
+      });
+
+      astream.on('close', (code: number, reason: string) => {
+        console.log('[kiwi audio close]', code, reason);
+        setConnected(false);
+        setStatus(`DISCONNECTED (${code}${reason ? ': ' + reason : ''})`);
+      });
+
+      const wfstream = kiwi.openWaterfallStream({
+        zoom,
+        centerFreq: viewCenterFreq,
+        speed: 4,
+        maxDb: -20,
+        minDb: -120,
+      });
+      wfStreamRef.current = wfstream;
+
+      wfstream.on('waterfall', (data) => {
+        wfRef.current?.addRow(data);
+      });
+
+      wfstream.on('msg', (message) => {
+        console.log('[kiwi waterfall msg]', message);
+      });
+
+      wfstream.on('error', (err) => {
+        console.log('[kiwi waterfall error]', err.message);
+        setError(err.message);
+      });
+
+      wfstream.on('close', (code: number, reason: string) => {
+        console.log('[kiwi waterfall close]', code, reason);
+      });
+
+      return;
+    }
+
+    const openWebRX = new OpenWebRX({
+      host: activeBackend.url.hostname,
+      port: parseInt(activeBackend.url.port || '8070', 10),
+      secure: activeBackend.url.protocol === 'https:',
+    });
+
+    const astream = openWebRX.openAudioStream({
       frequency,
       mode,
       lowCut,
       highCut,
-      agc,
       sampleRate: 12000,
     });
     audioStreamRef.current = astream;
 
+    astream.on('config', applyReceiverConfig);
     astream.on('open', () => {
       setConnected(true);
       setStatus('CONNECTED');
     });
-
-    astream.on('audio', ({ samples, rssi: r }) => {
-      console.log('[kiwi audio SND packet] samples:', samples.length, 'rssi:', r);
+    astream.on('audio', ({ samples, rssi: level }) => {
+      console.log('[openwebrx audio]', samples.length, level);
       audio.play(samples);
-      setRssi(r);
+      setRssi(level);
     });
-
-    astream.on('smeter', (rssi) => {
-      console.log('[kiwi smeter]', rssi);
+    astream.on('smeter', (level) => {
+      console.log('[openwebrx smeter]', level);
+      setRssi(level);
     });
-
-    astream.on('msg', (params) => {
-      console.log('[kiwi audio msg]', params);
+    astream.on('msg', (message) => {
+      console.log('[openwebrx audio msg]', message);
     });
-
     astream.on('error', (err) => {
       setError(err.message);
       setStatus('ERROR');
       setConnected(false);
     });
-
     astream.on('close', (code: number, reason: string) => {
-      console.log('[kiwi audio close]', code, reason);
+      console.log('[openwebrx audio close]', code, reason);
       setConnected(false);
       setStatus(`DISCONNECTED (${code}${reason ? ': ' + reason : ''})`);
     });
 
-    // Waterfall stream
-    const wfstream = kiwi.openWaterfallStream({
+    const wfstream = openWebRX.openWaterfallStream({
       zoom,
-      centerFreq,
+      centerFreq: viewCenterFreq,
       speed: 4,
       maxDb: -20,
       minDb: -120,
     });
     wfStreamRef.current = wfstream;
 
+    wfstream.on('config', applyReceiverConfig);
     wfstream.on('waterfall', (data) => {
-      console.log('[kiwi WF packet] bins:', data.bins.length);
       wfRef.current?.addRow(data);
     });
-
-    wfstream.on('msg', (params) => {
-      console.log('[kiwi wf msg]', params);
+    wfstream.on('msg', (message) => {
+      console.log('[openwebrx waterfall msg]', message);
     });
-
-    wfstream.on('open', () => {
-      console.log('[kiwi wf open]');
-    });
-
     wfstream.on('error', (err) => {
-      console.log('[kiwi wf error]', err.message);
+      console.log('[openwebrx waterfall error]', err.message);
       setError(err.message);
     });
-
     wfstream.on('close', (code: number, reason: string) => {
-      console.log('[kiwi wf close]', code, reason);
+      console.log('[openwebrx waterfall close]', code, reason);
     });
-  }, [connected, disconnect, frequency, mode, lowCut, highCut, agc, zoom, centerFreq, audio]);
-
-  // Update volume without reconnecting
-  useEffect(() => {
-    audio.setVolume(volume);
-  }, [volume, audio]);
+  }, [
+    activeBackend,
+    agc,
+    applyReceiverConfig,
+    audio,
+    connected,
+    disconnect,
+    frequency,
+    highCut,
+    lowCut,
+    mode,
+    viewCenterFreq,
+    zoom,
+  ]);
 
   const handleFreqKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') {
-      const f = parseFloat(freqInput);
-      if (!isNaN(f) && f > 0 && f <= 30000) {
-        setFrequency(f);
-        setCenterFreq(f);
-        audioStreamRef.current?.tune(f, mode);
-        wfStreamRef.current?.setView(zoom, f);
-      }
-    }
-  }, [freqInput, mode, zoom]);
+    if (e.key !== 'Enter') return;
 
-  const handleTune = useCallback((freq: number) => {
-    const f = Math.round(freq * 10) / 10;
-    setFrequency(f);
-    setFreqInput(f.toFixed(1));
-    audioStreamRef.current?.tune(f, mode);
-  }, [mode]);
+    const nextFrequency = parseFloat(freqInput);
+    if (!Number.isNaN(nextFrequency) && nextFrequency > 0) {
+      tuneReceiver(nextFrequency, zoom > 0);
+    }
+  }, [freqInput, tuneReceiver, zoom]);
+
+  const handleTune = useCallback((nextFrequency: number) => {
+    tuneReceiver(nextFrequency, false);
+  }, [tuneReceiver]);
 
   const handleModeChange = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
-    const m = e.target.value as AudioMode;
-    const cuts = MODE_CUTS[m];
-    setMode(m);
+    const nextMode = e.target.value as AudioMode;
+    const cuts = MODE_CUTS[nextMode];
+
+    setMode(nextMode);
     setLowCut(cuts.lowCut);
     setHighCut(cuts.highCut);
-    audioStreamRef.current?.tune(frequency, m, cuts.lowCut, cuts.highCut);
+    audioStreamRef.current?.tune(frequency, nextMode, cuts.lowCut, cuts.highCut);
   }, [frequency]);
 
   const handleZoomChange = useCallback((delta: number) => {
-    const z = Math.max(0, Math.min(14, zoom + delta));
-    setZoom(z);
-    if (z > 0) {
-      const bw = 30000 / Math.pow(2, z);
-      const cf = Math.max(bw / 2, Math.min(30000 - bw / 2, frequency));
-      setCenterFreq(cf);
-      wfStreamRef.current?.setView(z, cf);
-    } else {
-      wfStreamRef.current?.setView(z, centerFreq);
-    }
-  }, [zoom, centerFreq, frequency]);
+    const nextZoom = Math.max(0, Math.min(14, zoom + delta));
+    const nextViewCenter = nextZoom === 0 ? receiverCenterFreq : clampViewCenter(frequency, nextZoom);
+
+    setZoom(nextZoom);
+    setViewCenterFreq(nextViewCenter);
+    wfStreamRef.current?.setView(nextZoom, nextViewCenter);
+  }, [clampViewCenter, frequency, receiverCenterFreq, zoom]);
 
   const handleAgcToggle = useCallback(() => {
-    const next = !agc;
-    setAgc(next);
-    audioStreamRef.current?.setAgc(next);
-  }, [agc]);
+    if (!agcSupported) return;
+
+    const nextAgc = !agc;
+    setAgc(nextAgc);
+    audioStreamRef.current?.setAgc(nextAgc);
+  }, [agc, agcSupported]);
 
   return (
     <>
       <header className="sdr-header">
-        <span className="sdr-title">KiwiSDR</span>
-        <span className="sdr-host">{SDR_HOST}:{SDR_PORT}</span>
+        <span className="sdr-title">{activeBackend?.name ?? 'SDR'}</span>
+        <span className="sdr-host">
+          {activeBackend ? `${activeBackend.url.hostname}:${activeBackend.url.port || (activeBackend.kind === 'kiwi' ? '8073' : '8070')}` : 'No backend configured'}
+        </span>
 
         <span className="sep">|</span>
+
+        <div className="ctrl-group">
+          <span className="ctrl-label">Backend</span>
+          <select
+            className="mode-select"
+            value={backend}
+            onChange={e => setBackend(e.target.value as BackendKind)}
+            disabled={connected}
+          >
+            {BACKENDS.map(candidate => (
+              <option key={candidate.kind} value={candidate.kind}>{candidate.name}</option>
+            ))}
+          </select>
+        </div>
 
         <div className="ctrl-group freq-display">
           <input
             className="freq-input"
             type="number"
-            min="0"
-            max="30000"
+            min={minFrequency}
+            max={maxFrequency}
             step="0.1"
             value={freqInput}
             onChange={e => setFreqInput(e.target.value)}
@@ -209,8 +441,8 @@ export default function App() {
         <div className="ctrl-group">
           <span className="ctrl-label">Mode</span>
           <select className="mode-select" value={mode} onChange={handleModeChange}>
-            {AUDIO_MODES.map(m => (
-              <option key={m} value={m}>{m.toUpperCase()}</option>
+            {availableModes.map(candidate => (
+              <option key={candidate} value={candidate}>{candidate.toUpperCase()}</option>
             ))}
           </select>
         </div>
@@ -220,11 +452,12 @@ export default function App() {
         <div className="ctrl-group">
           <span className="ctrl-label">AGC</span>
           <button
-            className={`btn ${agc ? 'active' : ''}`}
+            className={`btn ${agcSupported && agc ? 'active' : ''}`}
             onClick={handleAgcToggle}
-            title="Toggle Automatic Gain Control"
+            disabled={!agcSupported}
+            title={agcSupported ? 'Toggle Automatic Gain Control' : 'OpenWebRX manages gain on the server side'}
           >
-            {agc ? 'ON' : 'OFF'}
+            {agcSupported ? (agc ? 'ON' : 'OFF') : 'N/A'}
           </button>
         </div>
 
@@ -245,18 +478,15 @@ export default function App() {
 
         <div className="ctrl-group">
           <span className="ctrl-label">Zoom</span>
-          <button className="btn" onClick={() => handleZoomChange(-1)} title="Zoom out">−</button>
+          <button className="btn" onClick={() => handleZoomChange(-1)} title="Zoom out">-</button>
           <span style={{ color: '#c8d8e8', minWidth: '16px', textAlign: 'center' }}>{zoom}</span>
           <button className="btn" onClick={() => handleZoomChange(1)} title="Zoom in">+</button>
         </div>
 
         <span className="sep">|</span>
 
-        <button
-          className={`btn connect ${connected ? 'connected' : ''}`}
-          onClick={connect}
-        >
-          {connected ? '⏹ DISCONNECT' : '▶ CONNECT'}
+        <button className={`btn connect ${connected ? 'connected' : ''}`} onClick={connect}>
+          {connected ? 'STOP' : 'CONNECT'}
         </button>
 
         <span style={{ color: connected ? '#00ff44' : '#445566', fontSize: '11px', marginLeft: '4px' }}>
@@ -265,12 +495,14 @@ export default function App() {
       </header>
 
       {error && (
-        <div className="error-banner">⚠ {error}</div>
+        <div className="error-banner">Warning: {error}</div>
       )}
 
       <Waterfall
         ref={wfRef}
-        centerFreq={centerFreq}
+        receiverBandwidth={receiverBandwidth}
+        receiverCenterFreq={receiverCenterFreq}
+        viewCenterFreq={viewCenterFreq}
         zoom={zoom}
         tuneFreq={frequency}
         lowCut={lowCut}
@@ -280,7 +512,7 @@ export default function App() {
         onTune={handleTune}
       />
 
-      <SMeter rssi={rssi} />
+      <SMeter rssi={rssi} unit={meterUnit} />
     </>
   );
 }

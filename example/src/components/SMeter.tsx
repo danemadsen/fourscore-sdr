@@ -1,5 +1,6 @@
 interface SMeterProps {
   rssi: number;
+  unit?: string;
 }
 
 // S-unit thresholds (dBm) — S1 = -121, each S-unit ≈ 6 dB
@@ -24,8 +25,9 @@ const S_LEVELS = [
 const MIN_DB = -127;
 const MAX_DB = -13;
 
-export function SMeter({ rssi }: SMeterProps) {
+export function SMeter({ rssi, unit = 'dBm' }: SMeterProps) {
   const pct = Math.max(0, Math.min(100, ((rssi - MIN_DB) / (MAX_DB - MIN_DB)) * 100));
+  const showSUnits = unit === 'dBm';
 
   const sLabel = () => {
     for (let i = S_LEVELS.length - 1; i >= 0; i--) {
@@ -54,8 +56,8 @@ export function SMeter({ rssi }: SMeterProps) {
         </div>
       </div>
       <div className="smeter-readout">
-        <span className="smeter-s">{sLabel()}</span>
-        <span className="smeter-db">{rssi.toFixed(1)} dBm</span>
+        <span className="smeter-s">{showSUnits ? sLabel() : 'SIG'}</span>
+        <span className="smeter-db">{rssi.toFixed(1)} {unit}</span>
       </div>
     </div>
   );

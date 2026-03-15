@@ -33,10 +33,10 @@ const COLOR_LUT = new Uint8Array(256 * 3);
   }
 })();
 
-const TOTAL_BW = 30000; // kHz
-
 interface WaterfallProps {
-  centerFreq: number;
+  receiverBandwidth: number;
+  receiverCenterFreq: number;
+  viewCenterFreq: number;
   zoom: number;
   tuneFreq: number;
   lowCut: number;   // Hz offset from tuneFreq
@@ -54,7 +54,7 @@ const CANVAS_W = 1024;
 const CANVAS_H = 300;
 
 export const Waterfall = forwardRef<WaterfallHandle, WaterfallProps>(
-  ({ centerFreq, zoom, tuneFreq, lowCut, highCut, minDb, maxDb, onTune }, ref) => {
+  ({ receiverBandwidth, receiverCenterFreq, viewCenterFreq, zoom, tuneFreq, lowCut, highCut, minDb, maxDb, onTune }, ref) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const rowBufRef = useRef<ImageData | null>(null);
     const [hoverFreq, setHoverFreq] = useState<number | null>(null);
@@ -78,11 +78,10 @@ export const Waterfall = forwardRef<WaterfallHandle, WaterfallProps>(
       if (!ctx) return;
       ctx.fillStyle = '#000';
       ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
-    }, [zoom, centerFreq]);
+    }, [zoom, receiverCenterFreq, viewCenterFreq]);
 
-    // At zoom=0 the full bandwidth is always shown regardless of centerFreq
-    const bw = TOTAL_BW / Math.pow(2, zoom);
-    const effectiveCenter = zoom === 0 ? TOTAL_BW / 2 : centerFreq;
+    const bw = receiverBandwidth / Math.pow(2, zoom);
+    const effectiveCenter = zoom === 0 ? receiverCenterFreq : viewCenterFreq;
     const fStart = effectiveCenter - bw / 2;
     const fEnd = effectiveCenter + bw / 2;
 
@@ -109,6 +108,12 @@ export const Waterfall = forwardRef<WaterfallHandle, WaterfallProps>(
         pixels[i * 4 + 2] = COLOR_LUT[v * 3 + 2];
         pixels[i * 4 + 3] = 255;
       }
+      for (let i = len; i < CANVAS_W; i++) {
+        pixels[i * 4 + 0] = 0;
+        pixels[i * 4 + 1] = 0;
+        pixels[i * 4 + 2] = 0;
+        pixels[i * 4 + 3] = 255;
+      }
       ctx.putImageData(row, 0, 0);
     }, [minDb, maxDb]);
 
@@ -122,23 +127,23 @@ export const Waterfall = forwardRef<WaterfallHandle, WaterfallProps>(
       if (!canvas) return;
       const rect = canvas.getBoundingClientRect();
       const x = (e.clientX - rect.left) / rect.width;
-      const effectiveCtr = zoom === 0 ? TOTAL_BW / 2 : centerFreq;
-      const bwLocal = TOTAL_BW / Math.pow(2, zoom);
+      const effectiveCtr = zoom === 0 ? receiverCenterFreq : viewCenterFreq;
+      const bwLocal = receiverBandwidth / Math.pow(2, zoom);
       const freq = effectiveCtr - bwLocal / 2 + x * bwLocal;
-      onTune(Math.max(0, Math.min(TOTAL_BW, freq)));
-    }, [centerFreq, zoom, onTune]);
+      onTune(Math.max(fStart, Math.min(fEnd, freq)));
+    }, [fEnd, fStart, onTune, receiverBandwidth, receiverCenterFreq, viewCenterFreq, zoom]);
 
     const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
       const canvas = canvasRef.current;
       if (!canvas) return;
       const rect = canvas.getBoundingClientRect();
       const x = (e.clientX - rect.left) / rect.width;
-      const effectiveCtr = zoom === 0 ? TOTAL_BW / 2 : centerFreq;
-      const bwLocal = TOTAL_BW / Math.pow(2, zoom);
+      const effectiveCtr = zoom === 0 ? receiverCenterFreq : viewCenterFreq;
+      const bwLocal = receiverBandwidth / Math.pow(2, zoom);
       const freq = effectiveCtr - bwLocal / 2 + x * bwLocal;
-      setHoverFreq(Math.max(0, Math.min(TOTAL_BW, freq)));
+      setHoverFreq(Math.max(fStart, Math.min(fEnd, freq)));
       setHoverX(e.clientX - rect.left);
-    }, [centerFreq, zoom]);
+    }, [fEnd, fStart, receiverBandwidth, receiverCenterFreq, viewCenterFreq, zoom]);
 
     const handleMouseLeave = useCallback(() => setHoverFreq(null), []);
 

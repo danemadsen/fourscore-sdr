@@ -7,6 +7,10 @@
     "module": "ESNext",
     "types": ["vite/client"],
     "skipLibCheck": true,
+    "baseUrl": ".",
+    "paths": {
+      "@fourscore/sdr": ["../dist/index.d.ts"]
+    },
 
     /* Bundler mode */
     "moduleResolution": "bundler",
