@@ -82,9 +82,11 @@ export class OpenWebRXStream extends EventEmitter implements OpenWebRXStreamEven
   private bandwidth = 0;
   private waterfallMin = -150;
   private waterfallMax = 0;
+  private fftSize = 1024;
   private sequence = 0;
   private dspStarted = false;
   private openEmitted = false;
+  private allowCenterFreqChanges = true;
   private activeProfileId = '';
   private lastConfigProfileId = '';
   // Audio rate measurement — detect actual server output rate from frame data
@@ -154,14 +156,31 @@ export class OpenWebRXStream extends EventEmitter implements OpenWebRXStreamEven
 
     switch (type) {
       case 'config': {
-        this.audioCompression = (value['audio_compression'] as string) ?? 'none';
-        this.fftCompression   = (value['fft_compression']   as string) ?? 'none';
-        this.centerFreq       = (value['center_freq']       as number) ?? 0;
-        this.bandwidth        = (value['samp_rate']         as number) ?? 0;
+        if (typeof value['audio_compression'] === 'string') {
+          this.audioCompression = value['audio_compression'] as string;
+        }
+        if (typeof value['fft_compression'] === 'string') {
+          this.fftCompression = value['fft_compression'] as string;
+        }
+        if (typeof value['center_freq'] === 'number') {
+          this.centerFreq = value['center_freq'] as number;
+        }
+        if (typeof value['samp_rate'] === 'number') {
+          this.bandwidth = value['samp_rate'] as number;
+        }
+        if (typeof value['allow_center_freq_changes'] === 'boolean') {
+          this.allowCenterFreqChanges = value['allow_center_freq_changes'] as boolean;
+        }
         const wfLevels = value['waterfall_levels'] as { min?: number; max?: number } | undefined;
-        this.waterfallMin = wfLevels?.min ?? -150;
-        this.waterfallMax = wfLevels?.max ?? 0;
-        const fftSize = (value['fft_size'] as number) ?? 1024;
+        if (typeof wfLevels?.min === 'number') {
+          this.waterfallMin = wfLevels.min;
+        }
+        if (typeof wfLevels?.max === 'number') {
+          this.waterfallMax = wfLevels.max;
+        }
+        if (typeof value['fft_size'] === 'number') {
+          this.fftSize = value['fft_size'] as number;
+        }
         const profileId = value['sdr_id'] && value['profile_id']
           ? `${value['sdr_id']}|${value['profile_id']}`
           : undefined;
@@ -193,7 +212,7 @@ export class OpenWebRXStream extends EventEmitter implements OpenWebRXStreamEven
           }
         }
 
-        console.log('[fourscore-sdr] openwebrx config:', { center_freq: this.centerFreq, samp_rate: this.bandwidth, fft_size: fftSize, audio_compression: this.audioCompression, fft_compression: this.fftCompression, waterfall_levels: { min: this.waterfallMin, max: this.waterfallMax } });
+        console.log('[fourscore-sdr] openwebrx config:', { center_freq: this.centerFreq, samp_rate: this.bandwidth, fft_size: this.fftSize, audio_compression: this.audioCompression, fft_compression: this.fftCompression, waterfall_levels: { min: this.waterfallMin, max: this.waterfallMax } });
         this.emit('config', {
           centerFreq:       this.centerFreq,
           bandwidth:        this.bandwidth,
@@ -201,7 +220,7 @@ export class OpenWebRXStream extends EventEmitter implements OpenWebRXStreamEven
           fftCompression:   this.fftCompression,
           waterfallMin:     this.waterfallMin,
           waterfallMax:     this.waterfallMax,
-          fftSize,
+          fftSize:          this.fftSize,
           profileId,
           profileChanged,
           startFreq: startFreqHz ?? (startOffsetHz !== undefined ? this.centerFreq + startOffsetHz : undefined),
@@ -360,9 +379,15 @@ export class OpenWebRXStream extends EventEmitter implements OpenWebRXStreamEven
     const withinBand = this.bandwidth > 0 && Math.abs(offsetHz) <= this.bandwidth / 2;
 
     if (!withinBand && this.centerFreq > 0) {
-      // Cross-band: ask server to retune SDR hardware center.
-      // Server will reply with a new config → config handler sends corrected dspcontrol.
-      this._sendJson({ type: 'setfrequency', params: { frequency: freqHz } });
+      if (this.allowCenterFreqChanges) {
+        // Cross-band: ask server to retune SDR hardware center.
+        // Wait for the new config before sending updated dspcontrol so we don't
+        // momentarily apply an impossible offset against the old center frequency.
+        this._sendJson({ type: 'setfrequency', params: { frequency: freqHz } });
+      } else {
+        console.warn('[fourscore-sdr] openwebrx tune is outside the active profile band and center frequency changes are disabled');
+      }
+      return;
     }
 
     // Always send action:start — the server at some installations ignores params-only

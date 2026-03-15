@@ -56,10 +56,39 @@ export default function App() {
   const owrxSdrCenter  = useRef(0);   // kHz — SDR hardware center, set from config
   const owrxSdrBw      = useRef(0);   // kHz — full SDR bandwidth, set from config
   const owrxInitialStateAppliedRef = useRef(false);
+  const pendingOwrxTuneRef = useRef<{ frequency: number; mode: AudioMode; lowCut: number; highCut: number } | null>(null);
   const wfCanvasWidthRef = useRef(wfCanvasWidth);
   useEffect(() => { zoomRef.current = zoom; },        [zoom]);
   useEffect(() => { centerFreqRef.current = centerFreq; }, [centerFreq]);
   useEffect(() => { wfCanvasWidthRef.current = wfCanvasWidth; }, [wfCanvasWidth]);
+
+  const findOwrxProfileForTune = useCallback((freq: number, nextMode: AudioMode) => {
+    const isAmFamily = ['am', 'amn', 'amw', 'sam', 'sal', 'sau', 'sas', 'qam'].includes(nextMode);
+    if (isAmFamily && freq >= 520 && freq <= 1710) {
+      return owrxProfiles.find(profile =>
+        /\|am$/i.test(profile.id) || /am broadcast/i.test(profile.name),
+      ) ?? null;
+    }
+    return null;
+  }, [owrxProfiles]);
+
+  const maybeSwitchOwrxProfileForTune = useCallback((freq: number, nextMode: AudioMode, nextLowCut: number, nextHighCut: number) => {
+    const stream = owrxStreamRef.current;
+    if (!stream || sdrType !== 'openwebrx') return false;
+
+    const offsetHz = Math.round(freq * 1000) - Math.round(owrxSdrCenter.current * 1000);
+    const withinBand = owrxSdrBw.current > 0 && Math.abs(offsetHz) <= (owrxSdrBw.current * 1000) / 2;
+    if (withinBand) return false;
+
+    const profile = findOwrxProfileForTune(freq, nextMode);
+    if (!profile || profile.id === owrxActiveProfile) return false;
+
+    pendingOwrxTuneRef.current = { frequency: freq, mode: nextMode, lowCut: nextLowCut, highCut: nextHighCut };
+    owrxInitialStateAppliedRef.current = false;
+    setOwrxActiveProfile(profile.id);
+    stream.selectProfile(profile.id);
+    return true;
+  }, [findOwrxProfileForTune, owrxActiveProfile, sdrType]);
 
   const disconnect = useCallback(() => {
     audioStreamRef.current?.close();
@@ -69,6 +98,7 @@ export default function App() {
     wfStreamRef.current    = null;
     owrxStreamRef.current  = null;
     owrxInitialStateAppliedRef.current = false;
+    pendingOwrxTuneRef.current = null;
     audio.stop();
     setConnected(false);
     setStatus('DISCONNECTED');
@@ -82,6 +112,7 @@ export default function App() {
     setStatus('CONNECTING...');
     owrxInitialStateAppliedRef.current = false;
     audio.init();
+    const outputRate = audio.getOutputRate();
 
     if (sdrType === 'kiwi') {
       // ── KiwiSDR ────────────────────────────────────────────────────────────
@@ -90,7 +121,7 @@ export default function App() {
       setWfCanvasWidth(1024);
       const client = new KiwiSDR({ host: kiwiAddr.host, port: kiwiAddr.port });
 
-      const astream = client.openAudioStream({ frequency, mode, lowCut, highCut, agc, sampleRate: 12000 });
+      const astream = client.openAudioStream({ frequency, mode, lowCut, highCut, agc, sampleRate: outputRate });
       audioStreamRef.current = astream;
       astream.on('open',   () => { setConnected(true); setStatus('CONNECTED'); });
       astream.on('audio',  ({ samples, rssi: r }) => { audio.play(samples); setRssi(r); });
@@ -113,16 +144,16 @@ export default function App() {
       // ── OpenWebRX ──────────────────────────────────────────────────────────
       const client = new OpenWebRX({ host: owrxAddr.host, port: owrxAddr.port });
 
-      const stream = client.connect({ frequency, mode, lowCut, highCut });
+      const stream = client.connect({ frequency, mode, lowCut, highCut, outputRate });
       owrxStreamRef.current = stream;
       stream.on('open',      () => { setConnected(true); setStatus('CONNECTED'); });
       stream.on('profiles',  (profiles, activeId) => { setOwrxProfiles(profiles); setOwrxActiveProfile(activeId); });
       stream.on('audio',     ({ samples }: AudioData) => audio.play(samples));
-      stream.on('audiorate', (rate: number) => audio.setServerRate(rate));
       stream.on('smeter',    (r: number) => setRssi(r));
       stream.on('error',  (err: Error) => { setError(err.message); setStatus('ERROR'); setConnected(false); });
       stream.on('close',  (code: number, reason: string) => {
         owrxInitialStateAppliedRef.current = false;
+        pendingOwrxTuneRef.current = null;
         setConnected(false);
         setStatus(`DISCONNECTED (${code}${reason ? ': ' + reason : ''})`);
       });
@@ -150,6 +181,17 @@ export default function App() {
           setLowCut(cuts.lowCut);
           setHighCut(cuts.highCut);
           owrxInitialStateAppliedRef.current = true;
+        }
+
+        const pendingTune = pendingOwrxTuneRef.current;
+        if (pendingTune && profileChanged) {
+          pendingOwrxTuneRef.current = null;
+          owrxStreamRef.current?.tune(
+            pendingTune.frequency,
+            pendingTune.mode,
+            pendingTune.lowCut,
+            pendingTune.highCut,
+          );
         }
       });
 
@@ -189,16 +231,20 @@ export default function App() {
     setFreqInput(f.toFixed(1));
     if (zoom > 0) setCenterFreq(f);
     audioStreamRef.current?.tune(f, mode);
-    owrxStreamRef.current?.tune(f, mode, lowCut, highCut);
+    if (!maybeSwitchOwrxProfileForTune(f, mode, lowCut, highCut)) {
+      owrxStreamRef.current?.tune(f, mode, lowCut, highCut);
+    }
     if (zoom > 0) wfStreamRef.current?.setView(zoom, f);
-  }, [freqInput, mode, lowCut, highCut, zoom]);
+  }, [freqInput, mode, lowCut, highCut, zoom, maybeSwitchOwrxProfileForTune]);
 
   const handleTune = useCallback((freq: number) => {
     const f = Math.round(freq * 10) / 10;
     setFrequency(f);
     setFreqInput(f.toFixed(1));
     audioStreamRef.current?.tune(f, mode);
-    owrxStreamRef.current?.tune(f, mode, lowCut, highCut);
+    if (!maybeSwitchOwrxProfileForTune(f, mode, lowCut, highCut)) {
+      owrxStreamRef.current?.tune(f, mode, lowCut, highCut);
+    }
     if (zoom > 0) {
       if (sdrType === 'kiwi') {
         const bw = 30000 / Math.pow(2, zoom);
@@ -214,7 +260,7 @@ export default function App() {
         setCenterFreq(Math.max(sdrCtr - sdrBw / 2 + half, Math.min(sdrCtr + sdrBw / 2 - half, f)));
       }
     }
-  }, [mode, lowCut, highCut, zoom, sdrType]);
+  }, [mode, lowCut, highCut, zoom, sdrType, maybeSwitchOwrxProfileForTune]);
 
   const handleModeChange = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
     const m = e.target.value as AudioMode;
@@ -223,8 +269,10 @@ export default function App() {
     setLowCut(cuts.lowCut);
     setHighCut(cuts.highCut);
     audioStreamRef.current?.tune(frequency, m, cuts.lowCut, cuts.highCut);
-    owrxStreamRef.current?.tune(frequency, m, cuts.lowCut, cuts.highCut);
-  }, [frequency]);
+    if (!maybeSwitchOwrxProfileForTune(frequency, m, cuts.lowCut, cuts.highCut)) {
+      owrxStreamRef.current?.tune(frequency, m, cuts.lowCut, cuts.highCut);
+    }
+  }, [frequency, maybeSwitchOwrxProfileForTune]);
 
   const handleZoomChange = useCallback((delta: number) => {
     const z = Math.max(0, Math.min(14, zoom + delta));
