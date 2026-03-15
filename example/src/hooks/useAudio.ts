@@ -1,4 +1,5 @@
 import { useRef, useCallback } from 'react';
+import { getOpenWebRXAudioProcessorUrl } from '@fourscore/sdr';
 
 const DEFAULT_OUTPUT_RATE = 12000;
 const MAX_QUEUE_SECONDS = 2;
@@ -178,7 +179,7 @@ export function useAudio() {
     gain.connect(ctx.destination);
 
     if (ctx.audioWorklet) {
-      const processorUrl = `${import.meta.env.BASE_URL}AudioProcessor.js`;
+      const processorUrl = getOpenWebRXAudioProcessorUrl();
       ctx.audioWorklet.addModule(processorUrl).then(() => {
         if (ctxRef.current !== ctx || workletRef.current) return;
         const node = new AudioWorkletNode(ctx, 'openwebrx-audio-processor', {

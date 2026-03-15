@@ -4,6 +4,7 @@ export { WaterfallStream } from './streams/waterfall';
 export { OpenWebRX } from './openwebrx';
 export { OpenWebRXStream } from './streams/openwebrx';
 export type { OpenWebRXConfig, OpenWebRXProfile } from './streams/openwebrx';
+export { getOpenWebRXAudioProcessorUrl } from './worklets';
 export { MODE_CUTS, AUDIO_MODES } from './modes';
 export type { ModeCuts } from './modes';
 export type {
