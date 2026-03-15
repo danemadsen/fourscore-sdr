@@ -5,7 +5,7 @@ import { Waterfall, type WaterfallHandle } from './components/Waterfall';
 import { SMeter } from './components/SMeter';
 import { useAudio } from './hooks/useAudio';
 
-const SDR_URL = import.meta.env.VITE_SDR_URL as string;
+const SDR_URL = import.meta.env.VITE_KIWI_SDR_URL as string;
 const parsed = new URL(SDR_URL);
 const SDR_HOST = parsed.hostname;
 const SDR_PORT = parseInt(parsed.port) || 8073;
