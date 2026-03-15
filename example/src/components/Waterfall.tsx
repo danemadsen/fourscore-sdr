@@ -152,7 +152,7 @@ export const Waterfall = forwardRef<WaterfallHandle, WaterfallProps>(
 
     return (
       <div className="waterfall-wrapper">
-        <div style={{ position: 'relative' }}>
+        <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
           <canvas
             ref={canvasRef}
             width={CANVAS_W}

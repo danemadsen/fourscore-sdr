@@ -211,7 +211,7 @@ body {
 
 .waterfall-canvas {
   width: 100%;
-  height: calc(100% - 20px);
+  height: 100%;
   display: block;
   cursor: crosshair;
   image-rendering: pixelated;
