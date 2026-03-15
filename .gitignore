@@ -3,3 +3,4 @@ dist/
 build/
 .claude
 tmp/
+.DS_Store
