@@ -47,6 +47,10 @@ export class ImaAdpcmDecoder {
   reset(): void {
     this.index = 0;
     this.prev = 0;
+    this.syncPhase = 0;
+    this.syncSynchronized = 0;
+    this.syncCounter = 0;
+    this.syncBufIdx = 0;
   }
 
   private decodeSample(code: number): number {
@@ -112,7 +116,10 @@ export class ImaAdpcmDecoder {
         case 2: // decode audio samples
           output[oi++] = this.decodeSample(data[i] & 0x0f);
           output[oi++] = this.decodeSample(data[i] >> 4);
-          if (--this.syncCounter === 0) {
+          // OpenWebRX emits 1001 ADPCM bytes between SYNC blocks. Keep the
+          // post-decrement check aligned with the reference client so we don't
+          // desynchronize and drop a byte at each boundary.
+          if (this.syncCounter-- === 0) {
             this.syncSynchronized = 0;
             this.syncPhase = 0;
           }
