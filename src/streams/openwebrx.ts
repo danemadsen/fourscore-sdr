@@ -24,6 +24,11 @@ const OWRX_MODE_MAP: Record<string, string> = {
   drm:  'drm',
 };
 
+function fromOpenWebRXMode(mode: string): AudioMode {
+  const match = Object.entries(OWRX_MODE_MAP).find(([, mapped]) => mapped === mode);
+  return (match ? match[0] : mode) as AudioMode;
+}
+
 export interface OpenWebRXConfig {
   centerFreq: number;  // Hz
   bandwidth:  number;  // Hz (samp_rate)
@@ -32,6 +37,10 @@ export interface OpenWebRXConfig {
   waterfallMin: number;  // dB
   waterfallMax: number;  // dB
   fftSize: number;       // bins per waterfall frame
+  profileId?: string;
+  profileChanged: boolean;
+  startFreq?: number;    // Hz
+  startMode?: AudioMode;
 }
 
 export interface OpenWebRXProfile {
@@ -77,6 +86,7 @@ export class OpenWebRXStream extends EventEmitter implements OpenWebRXStreamEven
   private dspStarted = false;
   private openEmitted = false;
   private activeProfileId = '';
+  private lastConfigProfileId = '';
   // Audio rate measurement — detect actual server output rate from frame data
   private audioRateStart = 0;
   private audioRateSamples = 0;
@@ -152,10 +162,37 @@ export class OpenWebRXStream extends EventEmitter implements OpenWebRXStreamEven
         this.waterfallMin = wfLevels?.min ?? -150;
         this.waterfallMax = wfLevels?.max ?? 0;
         const fftSize = (value['fft_size'] as number) ?? 1024;
-        // Track active profile from config so we can report it with the profiles list
-        if (value['sdr_id'] && value['profile_id']) {
-          this.activeProfileId = `${value['sdr_id']}|${value['profile_id']}`;
+        const profileId = value['sdr_id'] && value['profile_id']
+          ? `${value['sdr_id']}|${value['profile_id']}`
+          : undefined;
+        const profileChanged = profileId !== undefined && profileId !== this.lastConfigProfileId;
+        if (profileId !== undefined) {
+          this.activeProfileId = profileId;
+          this.lastConfigProfileId = profileId;
         }
+
+        const startOffsetHz = value['start_offset_freq'] as number | undefined;
+        const startFreqHz   = value['start_freq']        as number | undefined;
+        const startModeRaw  = value['start_mod']         as string | undefined;
+        const startMode = startModeRaw !== undefined ? fromOpenWebRXMode(startModeRaw) : undefined;
+        const shouldAdoptStartState = !this.openEmitted || profileChanged;
+
+        if (shouldAdoptStartState) {
+          if (startFreqHz !== undefined) {
+            this.opts.frequency = startFreqHz / 1000;
+          } else if (startOffsetHz !== undefined) {
+            this.opts.frequency = (this.centerFreq + startOffsetHz) / 1000;
+          }
+          if (startMode !== undefined) {
+            this.opts.mode = startMode;
+            const cuts = MODE_CUTS[startMode];
+            if (cuts) {
+              this.opts.lowCut  = cuts.lowCut;
+              this.opts.highCut = cuts.highCut;
+            }
+          }
+        }
+
         console.log('[fourscore-sdr] openwebrx config:', { center_freq: this.centerFreq, samp_rate: this.bandwidth, fft_size: fftSize, audio_compression: this.audioCompression, fft_compression: this.fftCompression, waterfall_levels: { min: this.waterfallMin, max: this.waterfallMax } });
         this.emit('config', {
           centerFreq:       this.centerFreq,
@@ -165,34 +202,15 @@ export class OpenWebRXStream extends EventEmitter implements OpenWebRXStreamEven
           waterfallMin:     this.waterfallMin,
           waterfallMax:     this.waterfallMax,
           fftSize,
+          profileId,
+          profileChanged,
+          startFreq: startFreqHz ?? (startOffsetHz !== undefined ? this.centerFreq + startOffsetHz : undefined),
+          startMode,
         });
         // Only start DSP once we have a valid config with real samp_rate.
         // The server sends 2-3 rapid config messages during startup; the first
         // ones have samp_rate=0 and would restart the DSP pipeline with wrong params.
         if (this.bandwidth > 0) {
-          // On first valid config, adopt start_offset_freq / start_mod if provided.
-          // This puts us at a frequency the server knows is within its tunable range,
-          // avoiding an out-of-band offset if the user's initial frequency doesn't match.
-          if (!this.openEmitted) {
-            const startOffsetHz = value['start_offset_freq'] as number | undefined;
-            const startMod      = value['start_mod']         as string | undefined;
-            if (startOffsetHz !== undefined) {
-              this.opts.frequency = (this.centerFreq + startOffsetHz) / 1000;
-            }
-            if (startMod !== undefined) {
-              // Reverse-map OpenWebRX mod name back to our AudioMode
-              const rev = Object.entries(OWRX_MODE_MAP).find(([, v]) => v === startMod);
-              const newMode = rev ? rev[0] as import('../types').AudioMode : startMod as import('../types').AudioMode;
-              this.opts.mode = newMode;
-              // Also update filter cuts to match the new mode — without this we'd
-              // send NFM mode with LSB filter cuts, producing garbled/no audio.
-              const cuts = MODE_CUTS[newMode];
-              if (cuts) {
-                this.opts.lowCut  = cuts.lowCut;
-                this.opts.highCut = cuts.highCut;
-              }
-            }
-          }
           // Always force action:start on config — mirrors the reference client which
           // stops and restarts the demodulator on every config (including the one
           // the server sends after a setfrequency command recenters the SDR hardware).

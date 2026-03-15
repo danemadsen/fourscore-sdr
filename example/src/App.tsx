@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { KiwiSDR, OpenWebRX, MODE_CUTS, AUDIO_MODES } from '@fourscore/sdr';
-import type { AudioStream, WaterfallStream, OpenWebRXStream, OpenWebRXProfile, AudioMode, AudioData, OpenWebRXWaterfallData } from '@fourscore/sdr';
+import type { AudioStream, WaterfallStream, OpenWebRXStream, OpenWebRXProfile, OpenWebRXConfig, AudioMode, AudioData, OpenWebRXWaterfallData } from '@fourscore/sdr';
 import { Waterfall, type WaterfallHandle } from './components/Waterfall';
 import { SMeter } from './components/SMeter';
 import { useAudio } from './hooks/useAudio';
@@ -55,6 +55,7 @@ export default function App() {
   const centerFreqRef  = useRef(centerFreq);
   const owrxSdrCenter  = useRef(0);   // kHz — SDR hardware center, set from config
   const owrxSdrBw      = useRef(0);   // kHz — full SDR bandwidth, set from config
+  const owrxInitialStateAppliedRef = useRef(false);
   const wfCanvasWidthRef = useRef(wfCanvasWidth);
   useEffect(() => { zoomRef.current = zoom; },        [zoom]);
   useEffect(() => { centerFreqRef.current = centerFreq; }, [centerFreq]);
@@ -67,6 +68,7 @@ export default function App() {
     audioStreamRef.current = null;
     wfStreamRef.current    = null;
     owrxStreamRef.current  = null;
+    owrxInitialStateAppliedRef.current = false;
     audio.stop();
     setConnected(false);
     setStatus('DISCONNECTED');
@@ -78,6 +80,7 @@ export default function App() {
 
     setError(null);
     setStatus('CONNECTING...');
+    owrxInitialStateAppliedRef.current = false;
     audio.init();
 
     if (sdrType === 'kiwi') {
@@ -119,11 +122,12 @@ export default function App() {
       stream.on('smeter',    (r: number) => setRssi(r));
       stream.on('error',  (err: Error) => { setError(err.message); setStatus('ERROR'); setConnected(false); });
       stream.on('close',  (code: number, reason: string) => {
+        owrxInitialStateAppliedRef.current = false;
         setConnected(false);
         setStatus(`DISCONNECTED (${code}${reason ? ': ' + reason : ''})`);
       });
 
-      stream.on('config', ({ centerFreq: cf, bandwidth, waterfallMin, waterfallMax, fftSize }: { centerFreq: number; bandwidth: number; waterfallMin: number; waterfallMax: number; fftSize: number }) => {
+      stream.on('config', ({ centerFreq: cf, bandwidth, waterfallMin, waterfallMax, fftSize, startFreq, startMode, profileChanged }: OpenWebRXConfig) => {
         const cfKHz = cf / 1000;
         const bwKHz = bandwidth / 1000;
         owrxSdrCenter.current = cfKHz;
@@ -136,6 +140,17 @@ export default function App() {
         // Reset zoom view to full SDR band on (re)connect
         setCenterFreq(cfKHz);
         centerFreqRef.current = cfKHz;
+
+        if (startFreq !== undefined && startMode !== undefined && (!owrxInitialStateAppliedRef.current || profileChanged)) {
+          const tunedKHz = startFreq / 1000;
+          const cuts = MODE_CUTS[startMode];
+          setFrequency(tunedKHz);
+          setFreqInput(tunedKHz.toFixed(1));
+          setMode(startMode);
+          setLowCut(cuts.lowCut);
+          setHighCut(cuts.highCut);
+          owrxInitialStateAppliedRef.current = true;
+        }
       });
 
       stream.on('waterfall', ({ bins }: OpenWebRXWaterfallData) => {
