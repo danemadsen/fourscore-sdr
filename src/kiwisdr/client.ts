@@ -1,6 +1,5 @@
-import { KiwiSDROptions, AudioStreamOptions, WaterfallStreamOptions } from './types';
-import { AudioStream } from './streams/audio';
-import { WaterfallStream } from './streams/waterfall';
+import { KiwiSDROptions, AudioStreamOptions, WaterfallStreamOptions } from '../types';
+import { AudioStream, WaterfallStream } from './stream';
 
 const DEFAULT_PORT = 8073;
 

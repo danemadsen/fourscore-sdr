@@ -1,5 +1,5 @@
-import { OpenWebRXOptions, OpenWebRXStreamOptions } from './types';
-import { OpenWebRXStream } from './streams/openwebrx';
+import { OpenWebRXOptions, OpenWebRXStreamOptions } from '../types';
+import { OpenWebRXStream } from './stream';
 
 export class OpenWebRX {
   private readonly host: string;
