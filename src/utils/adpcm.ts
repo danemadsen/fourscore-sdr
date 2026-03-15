@@ -23,9 +23,20 @@ function clamp(val: number, min: number, max: number): number {
   return val < min ? min : val > max ? max : val;
 }
 
+// Bytes per ADPCM block between SYNC words (matches openwebrx reference client)
+const SYNC_PERIOD = 1000;
+const SYNC_WORD = [83, 89, 78, 67]; // 'S','Y','N','C'
+
 export class ImaAdpcmDecoder {
   private index = 0;
   private prev = 0;
+
+  // State for decodeWithSync (maintained across calls)
+  private syncPhase = 0;          // 0=hunt, 1=read state, 2=decode
+  private syncSynchronized = 0;   // how many SYNC bytes matched so far
+  private syncCounter = 0;        // bytes remaining until next SYNC
+  private syncBuf = new Uint8Array(4);
+  private syncBufIdx = 0;
 
   /** Called when server sends audio_adpcm_state=index,prev in a MSG */
   preset(index: number, prev: number): void {
@@ -36,6 +47,10 @@ export class ImaAdpcmDecoder {
   reset(): void {
     this.index = 0;
     this.prev = 0;
+    this.syncPhase = 0;
+    this.syncSynchronized = 0;
+    this.syncCounter = 0;
+    this.syncBufIdx = 0;
   }
 
   private decodeSample(code: number): number {
@@ -63,5 +78,55 @@ export class ImaAdpcmDecoder {
       samples[i * 2 + 1] = this.decodeSample(b >> 4);    // upper nibble
     }
     return samples;
+  }
+
+  /**
+   * Decode OpenWebRX-style ADPCM audio which embeds "SYNC" + codec state
+   * every SYNC_PERIOD bytes. State is preserved across calls.
+   */
+  decodeWithSync(data: Uint8Array): Int16Array {
+    const output = new Int16Array(data.length * 2);
+    let oi = 0;
+
+    for (let i = 0; i < data.length; i++) {
+      switch (this.syncPhase) {
+        case 0: // hunt for "SYNC" word
+          if (data[i] === SYNC_WORD[this.syncSynchronized]) {
+            this.syncSynchronized++;
+          } else {
+            this.syncSynchronized = 0;
+          }
+          if (this.syncSynchronized === 4) {
+            this.syncBufIdx = 0;
+            this.syncPhase = 1;
+          }
+          break;
+
+        case 1: // read 4-byte codec state (stepIndex, predictor as two Int16LE)
+          this.syncBuf[this.syncBufIdx++] = data[i];
+          if (this.syncBufIdx === 4) {
+            const state = new Int16Array(this.syncBuf.buffer);
+            this.index = state[0];
+            this.prev  = state[1];
+            this.syncCounter = SYNC_PERIOD;
+            this.syncPhase = 2;
+          }
+          break;
+
+        case 2: // decode audio samples
+          output[oi++] = this.decodeSample(data[i] & 0x0f);
+          output[oi++] = this.decodeSample(data[i] >> 4);
+          // OpenWebRX emits 1001 ADPCM bytes between SYNC blocks. Keep the
+          // post-decrement check aligned with the reference client so we don't
+          // desynchronize and drop a byte at each boundary.
+          if (this.syncCounter-- === 0) {
+            this.syncSynchronized = 0;
+            this.syncPhase = 0;
+          }
+          break;
+      }
+    }
+
+    return output.subarray(0, oi);
   }
 }

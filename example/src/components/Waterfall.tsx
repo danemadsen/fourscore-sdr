@@ -33,16 +33,18 @@ const COLOR_LUT = new Uint8Array(256 * 3);
   }
 })();
 
-const TOTAL_BW = 30000; // kHz
-
 interface WaterfallProps {
   centerFreq: number;
+  /** Total bandwidth of the view at zoom=0, in kHz. Defaults to 30000. */
+  totalBw?: number;
   zoom: number;
   tuneFreq: number;
   lowCut: number;   // Hz offset from tuneFreq
   highCut: number;  // Hz offset from tuneFreq
   minDb: number;
   maxDb: number;
+  /** Internal canvas pixel width — set to fft_size for full resolution. Defaults to 1024. */
+  canvasWidth?: number;
   onTune: (freq: number) => void;
 }
 
@@ -50,25 +52,26 @@ export interface WaterfallHandle {
   addRow(data: WaterfallData): void;
 }
 
-const CANVAS_W = 1024;
 const CANVAS_H = 300;
 
 export const Waterfall = forwardRef<WaterfallHandle, WaterfallProps>(
-  ({ centerFreq, zoom, tuneFreq, lowCut, highCut, minDb, maxDb, onTune }, ref) => {
+  ({ centerFreq, totalBw = 30000, zoom, tuneFreq, lowCut, highCut, minDb, maxDb, canvasWidth = 1024, onTune }, ref) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const rowBufRef = useRef<ImageData | null>(null);
     const [hoverFreq, setHoverFreq] = useState<number | null>(null);
     const [hoverX, setHoverX] = useState(0);
 
+    // Re-initialise when canvas width changes (e.g. when fft_size is known after connect)
     useEffect(() => {
       const canvas = canvasRef.current;
       if (!canvas) return;
+      canvas.width = canvasWidth;
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
       ctx.fillStyle = '#000';
-      ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
-      rowBufRef.current = ctx.createImageData(CANVAS_W, 1);
-    }, []);
+      ctx.fillRect(0, 0, canvasWidth, CANVAS_H);
+      rowBufRef.current = ctx.createImageData(canvasWidth, 1);
+    }, [canvasWidth]);
 
     // Clear canvas when view changes so overlays stay aligned with incoming data
     useEffect(() => {
@@ -77,14 +80,12 @@ export const Waterfall = forwardRef<WaterfallHandle, WaterfallProps>(
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
       ctx.fillStyle = '#000';
-      ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
-    }, [zoom, centerFreq]);
+      ctx.fillRect(0, 0, canvasWidth, CANVAS_H);
+    }, [zoom, centerFreq, canvasWidth]);
 
-    // At zoom=0 the full bandwidth is always shown regardless of centerFreq
-    const bw = TOTAL_BW / Math.pow(2, zoom);
-    const effectiveCenter = zoom === 0 ? TOTAL_BW / 2 : centerFreq;
-    const fStart = effectiveCenter - bw / 2;
-    const fEnd = effectiveCenter + bw / 2;
+    const bw = totalBw / Math.pow(2, zoom);
+    const fStart = centerFreq - bw / 2;
+    const fEnd = centerFreq + bw / 2;
 
     const addRow = useCallback((data: WaterfallData) => {
       const canvas = canvasRef.current;
@@ -92,17 +93,19 @@ export const Waterfall = forwardRef<WaterfallHandle, WaterfallProps>(
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
 
-      const existing = ctx.getImageData(0, 0, CANVAS_W, CANVAS_H - 1);
+      const existing = ctx.getImageData(0, 0, canvasWidth, CANVAS_H - 1);
       ctx.putImageData(existing, 0, 1);
 
-      const row = rowBufRef.current ?? ctx.createImageData(CANVAS_W, 1);
+      const row = rowBufRef.current ?? ctx.createImageData(canvasWidth, 1);
       const pixels = row.data;
       const bins = data.bins;
-      const len = Math.min(bins.length, CANVAS_W);
+      const isFloat = bins instanceof Float32Array;
       const range = maxDb - minDb || 1;
-      for (let i = 0; i < len; i++) {
-        // Server encodes dBm as: byte = dBm + 255  →  dBm = byte - 255
-        const dBm = bins[i] - 255;
+      for (let i = 0; i < canvasWidth; i++) {
+        // Nearest-neighbour scale: map canvas pixel i → bin index
+        const binIdx = Math.min(bins.length - 1, Math.floor(i * bins.length / canvasWidth));
+        // Float32Array = raw dB (OpenWebRX); Uint8Array = KiwiSDR encoding (byte = dBm+255)
+        const dBm = isFloat ? (bins as Float32Array)[binIdx] : (bins as Uint8Array)[binIdx] - 255;
         const v = Math.max(0, Math.min(255, Math.round((dBm - minDb) / range * 255)));
         pixels[i * 4 + 0] = COLOR_LUT[v * 3 + 0];
         pixels[i * 4 + 1] = COLOR_LUT[v * 3 + 1];
@@ -110,7 +113,7 @@ export const Waterfall = forwardRef<WaterfallHandle, WaterfallProps>(
         pixels[i * 4 + 3] = 255;
       }
       ctx.putImageData(row, 0, 0);
-    }, [minDb, maxDb]);
+    }, [minDb, maxDb, canvasWidth]);
 
     useImperativeHandle(ref, () => ({ addRow }), [addRow]);
 
@@ -122,23 +125,21 @@ export const Waterfall = forwardRef<WaterfallHandle, WaterfallProps>(
       if (!canvas) return;
       const rect = canvas.getBoundingClientRect();
       const x = (e.clientX - rect.left) / rect.width;
-      const effectiveCtr = zoom === 0 ? TOTAL_BW / 2 : centerFreq;
-      const bwLocal = TOTAL_BW / Math.pow(2, zoom);
-      const freq = effectiveCtr - bwLocal / 2 + x * bwLocal;
-      onTune(Math.max(0, Math.min(TOTAL_BW, freq)));
-    }, [centerFreq, zoom, onTune]);
+      const bwLocal = totalBw / Math.pow(2, zoom);
+      const freq = centerFreq - bwLocal / 2 + x * bwLocal;
+      onTune(Math.max(0, Math.min(centerFreq + bwLocal / 2, freq)));
+    }, [centerFreq, totalBw, zoom, onTune]);
 
     const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
       const canvas = canvasRef.current;
       if (!canvas) return;
       const rect = canvas.getBoundingClientRect();
       const x = (e.clientX - rect.left) / rect.width;
-      const effectiveCtr = zoom === 0 ? TOTAL_BW / 2 : centerFreq;
-      const bwLocal = TOTAL_BW / Math.pow(2, zoom);
-      const freq = effectiveCtr - bwLocal / 2 + x * bwLocal;
-      setHoverFreq(Math.max(0, Math.min(TOTAL_BW, freq)));
+      const bwLocal = totalBw / Math.pow(2, zoom);
+      const freq = centerFreq - bwLocal / 2 + x * bwLocal;
+      setHoverFreq(Math.max(0, Math.min(centerFreq + bwLocal / 2, freq)));
       setHoverX(e.clientX - rect.left);
-    }, [centerFreq, zoom]);
+    }, [centerFreq, totalBw, zoom]);
 
     const handleMouseLeave = useCallback(() => setHoverFreq(null), []);
 
@@ -155,7 +156,6 @@ export const Waterfall = forwardRef<WaterfallHandle, WaterfallProps>(
         <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
           <canvas
             ref={canvasRef}
-            width={CANVAS_W}
             height={CANVAS_H}
             className="waterfall-canvas"
             onClick={handleClick}
@@ -204,7 +204,7 @@ export const Waterfall = forwardRef<WaterfallHandle, WaterfallProps>(
           {hoverFreq !== null && (
             <div style={{
               position: 'absolute', bottom: 24, pointerEvents: 'none',
-              left: Math.min(hoverX, CANVAS_W - 90),
+              left: Math.min(hoverX, canvasWidth - 90),
               color: '#fff', fontSize: '11px', fontFamily: 'monospace',
               background: 'rgba(0,0,0,0.7)', padding: '2px 5px',
               whiteSpace: 'nowrap',

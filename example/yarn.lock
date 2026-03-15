@@ -339,10 +339,8 @@
     "@eslint/core" "^0.17.0"
     levn "^0.4.1"
 
-"@fourscore/sdr@^0.1.1":
-  version "0.1.1"
-  resolved "https://registry.yarnpkg.com/@fourscore/sdr/-/sdr-0.1.1.tgz#f59572182a4538491ee7e046c457b87996af3eb3"
-  integrity sha512-HdkOa4NYf5Tvg0jYjiBCmwO/lO42tqITvJXfuYCusSJ/MxxZfsZiCfxLnlaXghyM8y6U02xymP7a0CJiPjKbCA==
+"@fourscore/sdr@file:..":
+  version "1.0.0"
 
 "@humanfs/core@^0.19.1":
   version "0.19.1"

@@ -1,12 +1,21 @@
 export { KiwiSDR } from './client';
 export { AudioStream } from './streams/audio';
 export { WaterfallStream } from './streams/waterfall';
+export { OpenWebRX } from './openwebrx';
+export { OpenWebRXStream } from './streams/openwebrx';
+export type { OpenWebRXConfig, OpenWebRXProfile } from './streams/openwebrx';
+export { getOpenWebRXAudioProcessorUrl } from './worklets';
+export { WebAudioPcmPlayer } from './web-audio-pcm-player';
 export { MODE_CUTS, AUDIO_MODES } from './modes';
 export type { ModeCuts } from './modes';
+export type { WebAudioPcmPlayerOptions } from './web-audio-pcm-player';
 export type {
   KiwiSDROptions,
   AudioStreamOptions,
   WaterfallStreamOptions,
+  OpenWebRXOptions,
+  OpenWebRXStreamOptions,
+  OpenWebRXWaterfallData,
   AudioMode,
   AudioData,
   WaterfallData,
