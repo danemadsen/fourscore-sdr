@@ -1,5 +1,3 @@
-import { getOpenWebRXAudioProcessorUrl } from './worklets';
-
 const DEFAULT_OUTPUT_RATE = 12000;
 const DEFAULT_MAX_QUEUE_SECONDS = 2;
 const DEFAULT_VOLUME = 0.8;
@@ -164,9 +162,7 @@ export class WebAudioPcmPlayer {
     const defaultOutputRate = this.options.defaultOutputRate ?? DEFAULT_OUTPUT_RATE;
     const maxQueueSeconds = this.options.maxQueueSeconds ?? DEFAULT_MAX_QUEUE_SECONDS;
     const workletProcessorName = this.options.workletProcessorName ?? DEFAULT_WORKLET_PROCESSOR_NAME;
-    const workletUrl = this.options.workletUrl === undefined
-      ? getOpenWebRXAudioProcessorUrl()
-      : this.options.workletUrl;
+    const workletUrl = this.options.workletUrl;
 
     const ctx = createPreferredAudioContext(preferredSampleRates);
     const { outputRate, factor } = findOutputRate(ctx.sampleRate, defaultOutputRate);
