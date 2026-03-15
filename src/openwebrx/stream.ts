@@ -1,4 +1,4 @@
-import { ImaAdpcmDecoder } from '../kiwisdr/adpcm';
+import { ImaAdpcmDecoder } from '../adpcm';
 import { AudioMode, AudioData, OpenWebRXStreamOptions, OpenWebRXWaterfallData } from '../types';
 import { MODE_CUTS } from '../modes';
 
