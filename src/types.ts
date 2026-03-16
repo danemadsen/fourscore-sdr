@@ -140,6 +140,114 @@ export interface OpenWebRXWaterfallData {
   bandwidth: number;
 }
 
+export type SDRType = 'kiwisdr' | 'openwebrx';
+
+export interface SDRProfile {
+  id: string;
+  name: string;
+}
+
+export interface SDRConfig {
+  /** Active SDR implementation */
+  type: SDRType;
+  /** SDR hardware center frequency in kHz */
+  centerFreq: number;
+  /** Full SDR bandwidth in kHz */
+  bandwidth: number;
+  /** Current waterfall view center frequency in kHz */
+  viewCenterFreq: number;
+  /** Current visible waterfall bandwidth in kHz */
+  viewBandwidth: number;
+  /** Waterfall zoom level */
+  zoom: number;
+  /** Current waterfall minimum level in dB */
+  waterfallMin: number;
+  /** Current waterfall maximum level in dB */
+  waterfallMax: number;
+  /** Current FFT size reported by the backend */
+  fftSize: number;
+  /** Provider-specific audio compression mode */
+  audioCompression?: string;
+  /** Provider-specific waterfall compression mode */
+  fftCompression?: string;
+  /** Provider-specific active profile id */
+  profileId?: string;
+  /** Whether the active profile changed in the last update */
+  profileChanged?: boolean;
+  /** Provider-reported initial tuned frequency in kHz */
+  startFreq?: number;
+  /** Provider-reported initial tuned mode */
+  startMode?: AudioMode;
+  /** Available profiles, if supported by the provider */
+  profiles?: SDRProfile[];
+  /** Currently active profile, if supported by the provider */
+  activeProfileId?: string;
+}
+
+export interface UniversalSDRCallbacks {
+  onOpen?: () => void;
+  onClose?: (code: number, reason: string) => void;
+  onAudio?: (data: AudioData) => void;
+  onWaterfall?: (data: WaterfallData) => void;
+  onError?: (error: Error) => void;
+  onSMeter?: (rssi: number) => void;
+  onConfig?: (config: SDRConfig) => void;
+}
+
+export interface UniversalSDROptions extends UniversalSDRCallbacks {
+  /** Hostname or host:port string */
+  host: string;
+  /** Port number, defaults to 8073 */
+  port?: number;
+  /** User password for protected receivers (KiwiSDR only) */
+  password?: string;
+  /** Username for identification */
+  username?: string;
+}
+
+export interface UniversalSDRConnectOptions {
+  /** Tuned frequency in kHz */
+  frequency: number;
+  /** Demodulation mode, defaults to 'am' */
+  mode?: AudioMode;
+  /** Low passband cut in Hz */
+  lowCut?: number;
+  /** High passband cut in Hz */
+  highCut?: number;
+  /** Output sample rate in Hz, defaults to 12000 */
+  sampleRate?: number;
+  /** Enable AGC (KiwiSDR only), defaults to true */
+  agc?: boolean;
+  agcHang?: boolean;
+  /** AGC threshold in dB (KiwiSDR only) */
+  agcThresh?: number;
+  agcSlope?: number;
+  /** AGC decay in ms (KiwiSDR only) */
+  agcDecay?: number;
+  /** Manual gain in dB (KiwiSDR only) */
+  manGain?: number;
+  /** Enable IMA-ADPCM audio compression where supported */
+  compression?: boolean;
+  /** Enable/disable KiwiSDR squelch or set OpenWebRX squelch level in dBm */
+  squelch?: boolean | number;
+  /** KiwiSDR squelch threshold */
+  squelchMax?: number;
+  /** Waterfall zoom level */
+  zoom?: number;
+  /** Waterfall center frequency in kHz */
+  centerFreq?: number;
+  /** Waterfall max dB (KiwiSDR only) */
+  maxDb?: number;
+  /** Waterfall min dB (KiwiSDR only) */
+  minDb?: number;
+  /** Waterfall update speed 1-4 (KiwiSDR only) */
+  speed?: number;
+  /** Enable waterfall compression (KiwiSDR only) */
+  waterfallCompression?: boolean;
+  /** Username override for this connection */
+  username?: string;
+}
+
 // ─── SND flags ────────────────────────────────────────────────────────────────
 
 export const SND_FLAG_ADC_OVFL = 0x02;
