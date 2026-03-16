@@ -3,7 +3,7 @@ import { KiwiSDR, OpenWebRX, MODE_CUTS, AUDIO_MODES } from '@fourscore/sdr';
 import type { AudioStream, WaterfallStream, OpenWebRXStream, OpenWebRXProfile, OpenWebRXConfig, AudioMode, AudioData, OpenWebRXWaterfallData } from '@fourscore/sdr';
 import { Waterfall, type WaterfallHandle } from './components/Waterfall';
 import { SMeter } from './components/SMeter';
-import { useAudio } from './hooks/useAudio';
+import PCMPlayer from './utilites/pcm';
 
 const KIWI_URL = import.meta.env.VITE_KIWI_SDR_URL as string;
 const OWRX_URL = import.meta.env.VITE_OPENWEBRX_SDR_URL as string;
@@ -48,7 +48,7 @@ export default function App() {
   const owrxStreamRef  = useRef<OpenWebRXStream | null>(null);
 
   const wfRef = useRef<WaterfallHandle>(null);
-  const audio = useAudio();
+  const playerRef = useRef<PCMPlayer | null>(null);
 
   // Refs kept in sync with state — safe to read inside stale event-handler closures
   const zoomRef        = useRef(zoom);
@@ -99,11 +99,12 @@ export default function App() {
     owrxStreamRef.current  = null;
     owrxInitialStateAppliedRef.current = false;
     pendingOwrxTuneRef.current = null;
-    audio.stop();
+    playerRef.current?.destroy();
+    playerRef.current = null;
     setConnected(false);
     setStatus('DISCONNECTED');
     setRssi(-127);
-  }, [audio]);
+  }, []);
 
   const connect = useCallback(() => {
     if (connected) { disconnect(); return; }
@@ -111,8 +112,10 @@ export default function App() {
     setError(null);
     setStatus('CONNECTING...');
     owrxInitialStateAppliedRef.current = false;
-    audio.init();
-    const outputRate = audio.getOutputRate();
+    if (!playerRef.current) {
+      playerRef.current = new PCMPlayer({ inputCodec: 'Int16', sampleRate: 12000 });
+    }
+    const outputRate = playerRef.current.option.sampleRate;
 
     if (sdrType === 'kiwi') {
       // ── KiwiSDR ────────────────────────────────────────────────────────────
@@ -124,7 +127,7 @@ export default function App() {
       const astream = client.openAudioStream({ frequency, mode, lowCut, highCut, agc, sampleRate: outputRate });
       audioStreamRef.current = astream;
       astream.on('open',   () => { setConnected(true); setStatus('CONNECTED'); });
-      astream.on('audio',  ({ samples, rssi: r }) => { audio.play(samples); setRssi(r); });
+      astream.on('audio',  ({ samples, rssi: r }) => { playerRef.current?.feed(samples); setRssi(r); });
       astream.on('smeter', r => setRssi(r));
       astream.on('error',  err => { setError(err.message); setStatus('ERROR'); setConnected(false); });
       astream.on('close',  (code, reason) => {
@@ -148,7 +151,7 @@ export default function App() {
       owrxStreamRef.current = stream;
       stream.on('open',      () => { setConnected(true); setStatus('CONNECTED'); });
       stream.on('profiles',  (profiles, activeId) => { setOwrxProfiles(profiles); setOwrxActiveProfile(activeId); });
-      stream.on('audio',     ({ samples }: AudioData) => audio.play(samples));
+      stream.on('audio',     ({ samples }: AudioData) => playerRef.current?.feed(samples));
       stream.on('smeter',    (r: number) => setRssi(r));
       stream.on('error',  (err: Error) => { setError(err.message); setStatus('ERROR'); setConnected(false); });
       stream.on('close',  (code: number, reason: string) => {
@@ -219,9 +222,9 @@ export default function App() {
         wfRef.current?.addRow({ bins: displayBins, sequence: 0, xBin: 0, zoom: 0, flags: 0 });
       });
     }
-  }, [connected, disconnect, sdrType, frequency, mode, lowCut, highCut, agc, zoom, centerFreq, audio]);
+  }, [connected, disconnect, sdrType, frequency, mode, lowCut, highCut, agc, zoom, centerFreq]);
 
-  useEffect(() => { audio.setVolume(volume); }, [volume, audio]);
+  useEffect(() => { playerRef.current?.volume(volume); }, [volume]);
 
   const handleFreqKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key !== 'Enter') return;
