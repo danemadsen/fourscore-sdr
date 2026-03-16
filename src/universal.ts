@@ -11,7 +11,6 @@ import type {
   AudioData,
   AudioMode,
   OpenWebRXWaterfallData,
-  SDRConfig,
   SDRProfile,
   SDRType,
   UniversalSDRCallbacks,
@@ -50,6 +49,13 @@ interface ResolvedConnectOptions {
   speed: number;
   waterfallCompression: boolean;
   username: string;
+}
+
+interface PendingOpenWebRXTune {
+  frequency: number;
+  mode: AudioMode;
+  lowCut: number;
+  highCut: number;
 }
 
 function parseHost(host: string, port?: number): { host: string; port: number } {
@@ -111,6 +117,8 @@ export class UniversalSDR {
   private openWebRXProfileId: string | undefined;
   private openWebRXStartFreq: number | undefined;
   private openWebRXStartMode: AudioMode | undefined;
+  private openWebRXInitialStateApplied = false;
+  private pendingOpenWebRXTune: PendingOpenWebRXTune | null = null;
 
   constructor(type: SDRType, options: UniversalSDROptions) {
     const parsed = parseHost(options.host, options.port);
@@ -126,6 +134,7 @@ export class UniversalSDR {
     const token = this.sessionId + 1;
     this.sessionId = token;
     this.disposeCurrentSession();
+
     const mode = options.mode ?? 'am';
     const cuts = MODE_CUTS[mode];
     const zoom = clampZoom(options.zoom ?? 0);
@@ -146,7 +155,9 @@ export class UniversalSDR {
       squelch: options.squelch ?? false,
       squelchMax: options.squelchMax ?? 0,
       zoom,
-      centerFreq: options.centerFreq ?? (zoom === 0 ? DEFAULT_KIWI_CENTER_KHZ : options.frequency),
+      centerFreq: options.centerFreq ?? (zoom === 0
+        ? (this.type === 'kiwisdr' ? DEFAULT_KIWI_CENTER_KHZ : options.frequency)
+        : options.frequency),
       maxDb: options.maxDb ?? DEFAULT_KIWI_MAX_DB,
       minDb: options.minDb ?? DEFAULT_KIWI_MIN_DB,
       speed: options.speed ?? 4,
@@ -182,20 +193,17 @@ export class UniversalSDR {
 
     const nextMode = mode ?? this.connectOptions.mode;
     const cuts = MODE_CUTS[nextMode];
-    const nextLowCut = lowCut ?? cuts.lowCut;
-    const nextHighCut = highCut ?? cuts.highCut;
+    this.applyTuneChange({
+      frequency,
+      mode: nextMode,
+      lowCut: lowCut ?? cuts.lowCut,
+      highCut: highCut ?? cuts.highCut,
+    });
+  }
 
-    this.connectOptions.frequency = frequency;
-    this.connectOptions.mode = nextMode;
-    this.connectOptions.lowCut = nextLowCut;
-    this.connectOptions.highCut = nextHighCut;
-
-    if (this.type === 'kiwisdr') {
-      this.audioStream?.tune(frequency, nextMode, nextLowCut, nextHighCut);
-      return;
-    }
-
-    this.openWebRXStream?.tune(frequency, nextMode, nextLowCut, nextHighCut);
+  setMode(mode: AudioMode): void {
+    if (!this.connectOptions) return;
+    this.tune(this.connectOptions.frequency, mode);
   }
 
   setAgc(enabled: boolean, manGain?: number): void {
@@ -203,35 +211,54 @@ export class UniversalSDR {
     this.connectOptions.agc = enabled;
     if (manGain !== undefined) this.connectOptions.manGain = manGain;
     this.audioStream?.setAgc(enabled, manGain);
+    this.emitCurrentConfig(false);
+  }
+
+  toggleAgc(): boolean | undefined {
+    if (!this.connectOptions || this.type !== 'kiwisdr') return undefined;
+    const nextAgc = !this.connectOptions.agc;
+    this.setAgc(nextAgc);
+    return nextAgc;
   }
 
   setWaterfallView(zoom: number, centerFreq?: number): void {
     if (!this.connectOptions) return;
 
-    this.connectOptions.zoom = clampZoom(zoom);
-    if (centerFreq !== undefined) {
-      this.connectOptions.centerFreq = centerFreq;
-    } else if (this.connectOptions.zoom === 0) {
-      this.connectOptions.centerFreq = this.type === 'kiwisdr'
-        ? DEFAULT_KIWI_CENTER_KHZ
-        : this.openWebRXCenterFreq || this.connectOptions.centerFreq;
-    }
+    const nextZoom = clampZoom(zoom);
+    const nextCenter = centerFreq ?? (nextZoom === 0
+      ? this.getDefaultCenterFreq()
+      : this.connectOptions.centerFreq);
+
+    this.connectOptions.zoom = nextZoom;
+    this.connectOptions.centerFreq = this.clampCenterFreq(nextCenter, nextZoom);
 
     if (this.type === 'kiwisdr') {
       this.waterfallStream?.setView(this.connectOptions.zoom, this.connectOptions.centerFreq);
-      this.emitKiwiConfig();
-      return;
     }
 
-    if (this.connectOptions.zoom > 0) {
-      this.connectOptions.centerFreq = this.getClampedOpenWebRXCenter(this.connectOptions.centerFreq);
-    }
-    this.emitOpenWebRXConfig(false);
+    this.emitCurrentConfig(false);
+  }
+
+  setZoom(zoom: number): void {
+    if (!this.connectOptions) return;
+    const nextZoom = clampZoom(zoom);
+    const nextCenter = nextZoom === 0
+      ? this.getDefaultCenterFreq()
+      : this.getDesiredCenterFreq(this.connectOptions.frequency, nextZoom);
+    this.setWaterfallView(nextZoom, nextCenter);
+  }
+
+  adjustZoom(delta: number): void {
+    if (!this.connectOptions) return;
+    this.setZoom(this.connectOptions.zoom + delta);
   }
 
   selectProfile(profileId: string): void {
     if (this.type !== 'openwebrx') return;
     this.openWebRXActiveProfileId = profileId;
+    this.openWebRXProfileId = profileId;
+    this.openWebRXInitialStateApplied = false;
+    this.pendingOpenWebRXTune = null;
     this.emitOpenWebRXConfig(false);
     this.openWebRXStream?.selectProfile(profileId);
   }
@@ -400,30 +427,51 @@ export class UniversalSDR {
     if (!this.connectOptions || this.openNotified) return;
     if (!this.kiwiAudioReady || !this.kiwiWaterfallReady) return;
 
-    this.openNotified = true;
     this.emitKiwiConfig();
+    this.openNotified = true;
     this.callbacks.onOpen?.();
   }
 
   private handleOpenWebRXConfig(config: InternalOpenWebRXConfig): void {
     if (!this.connectOptions) return;
 
-    this.openWebRXCenterFreq = config.centerFreq / 1000;
-    this.openWebRXBandwidth = config.bandwidth / 1000;
+    if (config.centerFreq > 0) this.openWebRXCenterFreq = config.centerFreq / 1000;
+    if (config.bandwidth > 0) this.openWebRXBandwidth = config.bandwidth / 1000;
     this.openWebRXWaterfallMin = config.waterfallMin;
     this.openWebRXWaterfallMax = config.waterfallMax;
     this.openWebRXFftSize = config.fftSize;
     this.openWebRXAudioCompression = config.audioCompression;
     this.openWebRXFftCompression = config.fftCompression;
     this.openWebRXProfileId = config.profileId;
-    this.openWebRXActiveProfileId = config.profileId ?? this.openWebRXActiveProfileId;
+    if (config.profileId !== undefined) this.openWebRXActiveProfileId = config.profileId;
     this.openWebRXStartFreq = config.startFreq !== undefined ? config.startFreq / 1000 : undefined;
     this.openWebRXStartMode = config.startMode;
 
-    if (this.connectOptions.zoom === 0) {
-      this.connectOptions.centerFreq = this.openWebRXCenterFreq;
-    } else {
-      this.connectOptions.centerFreq = this.getClampedOpenWebRXCenter(this.connectOptions.centerFreq);
+    const hasPendingProfileTune = config.profileChanged && this.pendingOpenWebRXTune !== null;
+    const shouldAdoptStartState = this.openWebRXStartFreq !== undefined
+      && this.openWebRXStartMode !== undefined
+      && (!this.openWebRXInitialStateApplied || (config.profileChanged && !hasPendingProfileTune));
+
+    if (shouldAdoptStartState && this.openWebRXStartFreq !== undefined && this.openWebRXStartMode !== undefined) {
+      const startFreq = this.openWebRXStartFreq;
+      const startMode = this.openWebRXStartMode;
+      const cuts = MODE_CUTS[startMode];
+      this.connectOptions.frequency = startFreq;
+      this.connectOptions.mode = startMode;
+      this.connectOptions.lowCut = cuts.lowCut;
+      this.connectOptions.highCut = cuts.highCut;
+      this.openWebRXInitialStateApplied = true;
+    }
+
+    this.connectOptions.centerFreq = this.connectOptions.zoom === 0
+      ? this.getDefaultCenterFreq()
+      : this.getDesiredCenterFreq(this.connectOptions.frequency, this.connectOptions.zoom);
+
+    if (hasPendingProfileTune) {
+      const pendingTune = this.pendingOpenWebRXTune;
+      this.pendingOpenWebRXTune = null;
+      if (pendingTune) this.applyTuneChange(pendingTune, false);
+      return;
     }
 
     this.emitOpenWebRXConfig(config.profileChanged);
@@ -437,6 +485,11 @@ export class UniversalSDR {
 
     this.callbacks.onConfig?.({
       type: 'kiwisdr',
+      frequency: this.connectOptions.frequency,
+      mode: this.connectOptions.mode,
+      lowCut: this.connectOptions.lowCut,
+      highCut: this.connectOptions.highCut,
+      agc: this.connectOptions.agc,
       centerFreq: this.connectOptions.centerFreq,
       bandwidth,
       viewCenterFreq: this.connectOptions.centerFreq,
@@ -454,14 +507,18 @@ export class UniversalSDR {
     const centerFreq = this.openWebRXCenterFreq;
     const bandwidth = this.openWebRXBandwidth;
     const viewCenterFreq = this.connectOptions.zoom === 0
-      ? centerFreq
-      : this.getClampedOpenWebRXCenter(this.connectOptions.centerFreq);
+      ? this.getDefaultCenterFreq()
+      : this.clampCenterFreq(this.connectOptions.centerFreq, this.connectOptions.zoom);
     const viewBandwidth = bandwidth > 0
       ? getVisibleBandwidth(bandwidth, this.connectOptions.zoom)
       : 0;
 
     this.callbacks.onConfig?.({
       type: 'openwebrx',
+      frequency: this.connectOptions.frequency,
+      mode: this.connectOptions.mode,
+      lowCut: this.connectOptions.lowCut,
+      highCut: this.connectOptions.highCut,
       centerFreq,
       bandwidth,
       viewCenterFreq,
@@ -481,6 +538,14 @@ export class UniversalSDR {
     });
   }
 
+  private emitCurrentConfig(profileChanged: boolean): void {
+    if (this.type === 'kiwisdr') {
+      this.emitKiwiConfig();
+      return;
+    }
+    this.emitOpenWebRXConfig(profileChanged);
+  }
+
   private normalizeOpenWebRXWaterfall(data: OpenWebRXWaterfallData): WaterfallData {
     if (!this.connectOptions || this.connectOptions.zoom === 0 || this.openWebRXBandwidth <= 0) {
       return {
@@ -493,7 +558,7 @@ export class UniversalSDR {
     }
 
     const visibleBandwidth = getVisibleBandwidth(this.openWebRXBandwidth, this.connectOptions.zoom);
-    const viewCenterFreq = this.getClampedOpenWebRXCenter(this.connectOptions.centerFreq);
+    const viewCenterFreq = this.clampCenterFreq(this.connectOptions.centerFreq, this.connectOptions.zoom);
     const sdrStart = this.openWebRXCenterFreq - this.openWebRXBandwidth / 2;
     const startFreq = viewCenterFreq - visibleBandwidth / 2;
     const endFreq = viewCenterFreq + visibleBandwidth / 2;
@@ -518,12 +583,87 @@ export class UniversalSDR {
     };
   }
 
-  private getClampedOpenWebRXCenter(centerFreq: number): number {
-    if (!this.connectOptions || this.openWebRXBandwidth <= 0 || this.connectOptions.zoom === 0) {
-      return this.openWebRXCenterFreq || centerFreq;
+  private applyTuneChange(tune: PendingOpenWebRXTune, allowProfileSwitch = true): void {
+    if (!this.connectOptions) return;
+
+    this.connectOptions.frequency = tune.frequency;
+    this.connectOptions.mode = tune.mode;
+    this.connectOptions.lowCut = tune.lowCut;
+    this.connectOptions.highCut = tune.highCut;
+
+    if (allowProfileSwitch && this.maybeSwitchOpenWebRXProfile(tune)) {
+      return;
     }
 
-    const visibleBandwidth = getVisibleBandwidth(this.openWebRXBandwidth, this.connectOptions.zoom);
+    if (this.connectOptions.zoom > 0) {
+      this.connectOptions.centerFreq = this.getDesiredCenterFreq(tune.frequency, this.connectOptions.zoom);
+    } else {
+      this.connectOptions.centerFreq = this.getDefaultCenterFreq();
+    }
+
+    if (this.type === 'kiwisdr') {
+      this.audioStream?.tune(tune.frequency, tune.mode, tune.lowCut, tune.highCut);
+      if (this.connectOptions.zoom > 0) {
+        this.waterfallStream?.setView(this.connectOptions.zoom, this.connectOptions.centerFreq);
+      }
+    } else {
+      this.openWebRXStream?.tune(tune.frequency, tune.mode, tune.lowCut, tune.highCut);
+    }
+
+    this.emitCurrentConfig(false);
+  }
+
+  private maybeSwitchOpenWebRXProfile(tune: PendingOpenWebRXTune): boolean {
+    if (this.type !== 'openwebrx' || !this.openWebRXStream) return false;
+
+    const offsetHz = Math.round(tune.frequency * 1000) - Math.round(this.openWebRXCenterFreq * 1000);
+    const withinBand = this.openWebRXBandwidth > 0 && Math.abs(offsetHz) <= (this.openWebRXBandwidth * 1000) / 2;
+    if (withinBand) return false;
+
+    const profile = this.findOpenWebRXProfileForTune(tune.frequency, tune.mode);
+    if (!profile || profile.id === this.openWebRXActiveProfileId) return false;
+
+    this.pendingOpenWebRXTune = tune;
+    this.openWebRXInitialStateApplied = false;
+    this.openWebRXActiveProfileId = profile.id;
+    this.openWebRXProfileId = profile.id;
+    this.emitOpenWebRXConfig(false);
+    this.openWebRXStream.selectProfile(profile.id);
+    return true;
+  }
+
+  private findOpenWebRXProfileForTune(frequency: number, mode: AudioMode): SDRProfile | null {
+    const isAmFamily = ['am', 'amn', 'amw', 'sam', 'sal', 'sau', 'sas', 'qam'].includes(mode);
+    if (isAmFamily && frequency >= 520 && frequency <= 1710) {
+      return this.openWebRXProfiles.find(profile =>
+        /\|am$/i.test(profile.id) || /am broadcast/i.test(profile.name),
+      ) ?? null;
+    }
+    return null;
+  }
+
+  private getDefaultCenterFreq(): number {
+    if (this.type === 'kiwisdr') return DEFAULT_KIWI_CENTER_KHZ;
+    return this.openWebRXCenterFreq || this.connectOptions?.centerFreq || 0;
+  }
+
+  private getDesiredCenterFreq(frequency: number, zoom: number): number {
+    if (zoom === 0) return this.getDefaultCenterFreq();
+    return this.clampCenterFreq(frequency, zoom);
+  }
+
+  private clampCenterFreq(centerFreq: number, zoom: number): number {
+    if (zoom === 0) return this.getDefaultCenterFreq();
+
+    if (this.type === 'kiwisdr') {
+      const visibleBandwidth = getVisibleBandwidth(DEFAULT_KIWI_BANDWIDTH_KHZ, zoom);
+      const half = visibleBandwidth / 2;
+      return Math.max(half, Math.min(DEFAULT_KIWI_BANDWIDTH_KHZ - half, centerFreq));
+    }
+
+    if (this.openWebRXBandwidth <= 0) return centerFreq;
+
+    const visibleBandwidth = getVisibleBandwidth(this.openWebRXBandwidth, zoom);
     const half = visibleBandwidth / 2;
     const minCenter = this.openWebRXCenterFreq - this.openWebRXBandwidth / 2 + half;
     const maxCenter = this.openWebRXCenterFreq + this.openWebRXBandwidth / 2 - half;
@@ -576,5 +716,7 @@ export class UniversalSDR {
     this.openWebRXProfileId = undefined;
     this.openWebRXStartFreq = undefined;
     this.openWebRXStartMode = undefined;
+    this.openWebRXInitialStateApplied = false;
+    this.pendingOpenWebRXTune = null;
   }
 }

@@ -150,6 +150,16 @@ export interface SDRProfile {
 export interface SDRConfig {
   /** Active SDR implementation */
   type: SDRType;
+  /** Current tuned frequency in kHz */
+  frequency: number;
+  /** Current demodulation mode */
+  mode: AudioMode;
+  /** Current low passband cut in Hz */
+  lowCut: number;
+  /** Current high passband cut in Hz */
+  highCut: number;
+  /** Current AGC state when supported */
+  agc?: boolean;
   /** SDR hardware center frequency in kHz */
   centerFreq: number;
   /** Full SDR bandwidth in kHz */

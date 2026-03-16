@@ -122,8 +122,11 @@ OpenWebRX-specific note:
 ### Methods
 
 ```ts
-sdr.tune(7100, 'lsb');
+sdr.tune(7100);            // retune and auto-center the waterfall when needed
+sdr.setMode('lsb');        // applies MODE_CUTS defaults for the mode
+sdr.adjustZoom(1);         // zoom in around the current tuned frequency
 sdr.setAgc(false, 60);      // KiwiSDR only
+sdr.toggleAgc();            // KiwiSDR only
 sdr.setWaterfallView(4, 7100);
 sdr.selectProfile('rtlsdr|am'); // OpenWebRX only
 sdr.close();
@@ -162,6 +165,11 @@ interface WaterfallData {
 ```ts
 interface SDRConfig {
   type: 'kiwisdr' | 'openwebrx';
+  frequency: number;
+  mode: AudioMode;
+  lowCut: number;
+  highCut: number;
+  agc?: boolean;
   centerFreq: number;
   bandwidth: number;
   viewCenterFreq: number;

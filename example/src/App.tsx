@@ -44,53 +44,14 @@ export default function App() {
   const wfRef = useRef<WaterfallHandle>(null);
   const playerRef = useRef<PCMPlayer | null>(null);
 
-  const owrxSdrCenter = useRef(0);
-  const owrxSdrBw = useRef(0);
-  const owrxInitialStateAppliedRef = useRef(false);
-  const pendingOwrxTuneRef = useRef<{ frequency: number; mode: AudioMode; lowCut: number; highCut: number } | null>(null);
   const wfCanvasWidthRef = useRef(wfCanvasWidth);
 
   useEffect(() => { wfCanvasWidthRef.current = wfCanvasWidth; }, [wfCanvasWidth]);
   useEffect(() => { playerRef.current?.volume(volume); }, [volume]);
 
-  const findOwrxProfileForTune = useCallback((freq: number, nextMode: AudioMode) => {
-    const isAmFamily = ['am', 'amn', 'amw', 'sam', 'sal', 'sau', 'sas', 'qam'].includes(nextMode);
-    if (isAmFamily && freq >= 520 && freq <= 1710) {
-      return owrxProfiles.find(profile =>
-        /\|am$/i.test(profile.id) || /am broadcast/i.test(profile.name),
-      ) ?? null;
-    }
-    return null;
-  }, [owrxProfiles]);
-
-  const maybeSwitchOwrxProfileForTune = useCallback((freq: number, nextMode: AudioMode, nextLowCut: number, nextHighCut: number) => {
-    const sdr = sdrRef.current;
-    if (!sdr || sdrType !== 'openwebrx') return false;
-
-    const offsetHz = Math.round(freq * 1000) - Math.round(owrxSdrCenter.current * 1000);
-    const withinBand = owrxSdrBw.current > 0 && Math.abs(offsetHz) <= (owrxSdrBw.current * 1000) / 2;
-    if (withinBand) return false;
-
-    const profile = findOwrxProfileForTune(freq, nextMode);
-    if (!profile || profile.id === owrxActiveProfile) return false;
-
-    pendingOwrxTuneRef.current = {
-      frequency: freq,
-      mode: nextMode,
-      lowCut: nextLowCut,
-      highCut: nextHighCut,
-    };
-    owrxInitialStateAppliedRef.current = false;
-    setOwrxActiveProfile(profile.id);
-    sdr.selectProfile(profile.id);
-    return true;
-  }, [findOwrxProfileForTune, owrxActiveProfile, sdrType]);
-
   const disconnect = useCallback(() => {
     sdrRef.current?.close();
     sdrRef.current = null;
-    owrxInitialStateAppliedRef.current = false;
-    pendingOwrxTuneRef.current = null;
     playerRef.current?.destroy();
     playerRef.current = null;
     setConnected(false);
@@ -99,47 +60,29 @@ export default function App() {
   }, []);
 
   const handleConfig = useCallback((config: SDRConfig) => {
+    setFrequency(config.frequency);
+    setFreqInput(config.frequency.toFixed(1));
+    setMode(config.mode);
+    setLowCut(config.lowCut);
+    setHighCut(config.highCut);
+    if (config.agc !== undefined) setAgc(config.agc);
+    setWfBandwidth(config.bandwidth);
+    setCenterFreq(config.viewCenterFreq);
+    setZoom(config.zoom);
+    setWfMinDb(config.waterfallMin !== -150 ? config.waterfallMin : -120);
+    setWfMaxDb(config.waterfallMax !== 0 ? config.waterfallMax : -20);
+    if (config.zoom === 0 || config.type === 'kiwisdr') {
+      setWfCanvasWidth(config.fftSize);
+      wfCanvasWidthRef.current = config.fftSize;
+    }
+
     if (config.type === 'openwebrx') {
-      owrxSdrCenter.current = config.centerFreq;
-      owrxSdrBw.current = config.bandwidth;
-
-      if (config.profiles) setOwrxProfiles(config.profiles);
-      if (config.activeProfileId !== undefined) setOwrxActiveProfile(config.activeProfileId);
-
-      setWfMinDb(config.waterfallMin !== -150 ? config.waterfallMin : -120);
-      setWfMaxDb(config.waterfallMax !== 0 ? config.waterfallMax : -20);
-
-      if (
-        config.startFreq !== undefined &&
-        config.startMode !== undefined &&
-        (!owrxInitialStateAppliedRef.current || config.profileChanged)
-      ) {
-        const cuts = MODE_CUTS[config.startMode];
-        setFrequency(config.startFreq);
-        setFreqInput(config.startFreq.toFixed(1));
-        setMode(config.startMode);
-        setLowCut(cuts.lowCut);
-        setHighCut(cuts.highCut);
-        owrxInitialStateAppliedRef.current = true;
-      }
-
-      const pendingTune = pendingOwrxTuneRef.current;
-      if (pendingTune && config.profileChanged) {
-        pendingOwrxTuneRef.current = null;
-        sdrRef.current?.tune(
-          pendingTune.frequency,
-          pendingTune.mode,
-          pendingTune.lowCut,
-          pendingTune.highCut,
-        );
-      }
+      setOwrxProfiles(config.profiles ?? []);
+      setOwrxActiveProfile(config.activeProfileId ?? '');
     } else {
       setOwrxProfiles([]);
       setOwrxActiveProfile('');
     }
-
-    setWfBandwidth(config.bandwidth);
-    setCenterFreq(config.viewCenterFreq);
   }, []);
 
   const handleWaterfall = useCallback((data: WaterfallData) => {
@@ -160,17 +103,9 @@ export default function App() {
     setStatus('CONNECTING...');
     setOwrxProfiles([]);
     setOwrxActiveProfile('');
-    owrxInitialStateAppliedRef.current = false;
-    pendingOwrxTuneRef.current = null;
 
     if (!playerRef.current) {
       playerRef.current = new PCMPlayer({ inputCodec: 'Int16', sampleRate: 12000 });
-    }
-
-    if (sdrType === 'kiwisdr') {
-      setWfMinDb(-110);
-      setWfMaxDb(-20);
-      setWfBandwidth(30000);
     }
 
     const addr = sdrType === 'kiwisdr' ? kiwiAddr : owrxAddr;
@@ -182,8 +117,6 @@ export default function App() {
         setStatus('CONNECTED');
       },
       onClose: (code, reason) => {
-        owrxInitialStateAppliedRef.current = false;
-        pendingOwrxTuneRef.current = null;
         setConnected(false);
         setStatus(`DISCONNECTED (${code}${reason ? ': ' + reason : ''})`);
       },
@@ -222,99 +155,28 @@ export default function App() {
     const nextFrequency = parseFloat(freqInput);
     if (isNaN(nextFrequency) || nextFrequency <= 0 || nextFrequency > 30000) return;
 
-    setFrequency(nextFrequency);
     setFreqInput(nextFrequency.toFixed(1));
-
-    const switchedProfile = maybeSwitchOwrxProfileForTune(nextFrequency, mode, lowCut, highCut);
-
-    if (zoom > 0 && !switchedProfile) {
-      setCenterFreq(nextFrequency);
-      sdrRef.current?.setWaterfallView(zoom, nextFrequency);
-    }
-
-    if (!switchedProfile) {
-      sdrRef.current?.tune(nextFrequency, mode, lowCut, highCut);
-    }
-  }, [freqInput, highCut, lowCut, maybeSwitchOwrxProfileForTune, mode, zoom]);
+    sdrRef.current?.tune(nextFrequency);
+  }, [freqInput]);
 
   const handleTune = useCallback((nextFrequency: number) => {
     const tunedFrequency = Math.round(nextFrequency * 10) / 10;
-    setFrequency(tunedFrequency);
     setFreqInput(tunedFrequency.toFixed(1));
-
-    const switchedProfile = maybeSwitchOwrxProfileForTune(tunedFrequency, mode, lowCut, highCut);
-    if (!switchedProfile) {
-      sdrRef.current?.tune(tunedFrequency, mode, lowCut, highCut);
-    }
-
-    if (!switchedProfile && zoom > 0) {
-      if (sdrType === 'kiwisdr') {
-        const visibleBw = 30000 / Math.pow(2, zoom);
-        const half = visibleBw / 2;
-        const nextCenter = Math.max(half, Math.min(30000 - half, tunedFrequency));
-        setCenterFreq(nextCenter);
-        sdrRef.current?.setWaterfallView(zoom, nextCenter);
-      } else {
-        const visibleBw = owrxSdrBw.current / Math.pow(2, zoom);
-        const half = visibleBw / 2;
-        const nextCenter = Math.max(
-          owrxSdrCenter.current - owrxSdrBw.current / 2 + half,
-          Math.min(owrxSdrCenter.current + owrxSdrBw.current / 2 - half, tunedFrequency),
-        );
-        setCenterFreq(nextCenter);
-        sdrRef.current?.setWaterfallView(zoom, nextCenter);
-      }
-    }
-  }, [highCut, lowCut, maybeSwitchOwrxProfileForTune, mode, sdrType, zoom]);
+    sdrRef.current?.tune(tunedFrequency);
+  }, []);
 
   const handleModeChange = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
     const nextMode = e.target.value as AudioMode;
-    const cuts = MODE_CUTS[nextMode];
-    setMode(nextMode);
-    setLowCut(cuts.lowCut);
-    setHighCut(cuts.highCut);
-    if (!maybeSwitchOwrxProfileForTune(frequency, nextMode, cuts.lowCut, cuts.highCut)) {
-      sdrRef.current?.tune(frequency, nextMode, cuts.lowCut, cuts.highCut);
-    }
-  }, [frequency, maybeSwitchOwrxProfileForTune]);
+    sdrRef.current?.setMode(nextMode);
+  }, []);
 
   const handleZoomChange = useCallback((delta: number) => {
-    const nextZoom = Math.max(0, Math.min(14, zoom + delta));
-    setZoom(nextZoom);
-
-    if (sdrType === 'kiwisdr') {
-      if (nextZoom > 0) {
-        const visibleBw = 30000 / Math.pow(2, nextZoom);
-        const nextCenter = Math.max(visibleBw / 2, Math.min(30000 - visibleBw / 2, frequency));
-        setCenterFreq(nextCenter);
-        sdrRef.current?.setWaterfallView(nextZoom, nextCenter);
-      } else {
-        setCenterFreq(15000);
-        sdrRef.current?.setWaterfallView(0, 15000);
-      }
-      return;
-    }
-
-    if (nextZoom > 0) {
-      const visibleBw = owrxSdrBw.current / Math.pow(2, nextZoom);
-      const half = visibleBw / 2;
-      const nextCenter = Math.max(
-        owrxSdrCenter.current - owrxSdrBw.current / 2 + half,
-        Math.min(owrxSdrCenter.current + owrxSdrBw.current / 2 - half, frequency),
-      );
-      setCenterFreq(nextCenter);
-      sdrRef.current?.setWaterfallView(nextZoom, nextCenter);
-    } else {
-      setCenterFreq(owrxSdrCenter.current);
-      sdrRef.current?.setWaterfallView(0, owrxSdrCenter.current);
-    }
-  }, [frequency, sdrType, zoom]);
+    sdrRef.current?.adjustZoom(delta);
+  }, []);
 
   const handleAgcToggle = useCallback(() => {
-    const nextAgc = !agc;
-    setAgc(nextAgc);
-    sdrRef.current?.setAgc(nextAgc);
-  }, [agc]);
+    sdrRef.current?.toggleAgc();
+  }, []);
 
   return (
     <>
